@@ -1,0 +1,482 @@
+[
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java中HashMap和ConcurrentHashMap有什么区别？什么场景用哪个？"
+      },
+      {
+        "role": "assistant",
+        "content": "核心区别：\n\n**HashMap**\n- 非线程安全，多线程并发 put 可能导致死循环（JDK7）或数据覆盖\n- 允许 null key 和 null value\n- 性能更高，无锁开销\n- 适用场景：单线程、局部变量、确认无并发访问\n\n**ConcurrentHashMap**\n- 线程安全，JDK8 用 CAS + synchronized 实现段锁\n- 不允许 null key/value\n- 读操作无锁，写操作锁粒度很细（只锁桶头节点）\n- 适用场景：多线程共享 Map、缓存、并发计数\n\n```java\n// HashMap — 单线程\nMap<String, Integer> map = new HashMap<>();\nmap.put(\"a\", 1);\n\n// ConcurrentHashMap — 多线程\nConcurrentHashMap<String, Integer> concurrent = new ConcurrentHashMap<>();\nconcurrent.put(\"a\", 1);\n// 原子操作\nconcurrent.computeIfAbsent(\"key\", k -> expensiveInit());\n```\n\n性能测试：单线程 HashMap 快约 20-30%；4 线程并发 HashMap 直接崩溃，ConcurrentHashMap 正常扩展。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java Stream 怎么把 List<String> 去重并排序？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\nList<String> list = Arrays.asList(\"apple\", \"banana\", \"Apple\", \"cherry\", \"banana\");\n\n// 去重 + 忽略大小写排序\nList<String> result = list.stream()\n    .distinct()\n    .sorted(String.CASE_INSENSITIVE_ORDER)\n    .collect(Collectors.toList());\n// [apple, Apple, banana, cherry] 注：distinct 不会合并大小写\n\n// 如果想忽略大小写去重\nList<String> result2 = list.stream()\n    .collect(Collectors.toMap(\n        String::toLowerCase,\n        Function.identity(),\n        (a, b) -> a  // 冲突时保留第一个\n    ))\n    .values().stream()\n    .sorted()\n    .collect(Collectors.toList());\n\n// 按自然排序去重（最简单）\nList<String> result3 = list.stream()\n    .distinct()\n    .sorted()\n    .toList();  // JDK 16+\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Boot 全局异常处理怎么写？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n@RestControllerAdvice\npublic class GlobalExceptionHandler {\n\n    // 业务异常\n    @ExceptionHandler(BusinessException.class)\n    public Result<Void> handleBusiness(BusinessException e) {\n        log.warn(\"业务异常: {}\", e.getMessage());\n        return Result.fail(e.getCode(), e.getMessage());\n    }\n\n    // 参数校验异常\n    @ExceptionHandler(MethodArgumentNotValidException.class)\n    public Result<Void> handleValidation(MethodArgumentNotValidException e) {\n        String msg = e.getBindingResult().getFieldErrors().stream()\n            .map(f -> f.getField() + \": \" + f.getDefaultMessage())\n            .collect(Collectors.joining(\"; \"));\n        return Result.fail(400, msg);\n    }\n\n    // 兜底\n    @ExceptionHandler(Exception.class)\n    public Result<Void> handleUnknown(Exception e) {\n        log.error(\"未知异常\", e);\n        return Result.fail(500, \"服务器内部错误\");\n    }\n}\n\n// 自定义业务异常\npublic class BusinessException extends RuntimeException {\n    private final int code;\n    public BusinessException(int code, String msg) {\n        super(msg);\n        this.code = code;\n    }\n    public int getCode() { return code; }\n}\n\n// 统一返回体\npublic class Result<T> {\n    private int code;\n    private String message;\n    private T data;\n    \n    public static <T> Result<T> fail(int code, String msg) {\n        Result<T> r = new Result<>();\n        r.code = code;\n        r.message = msg;\n        return r;\n    }\n}\n```\n\n关键点：`@RestControllerAdvice` 覆盖所有 Controller，异常按从细到粗排列，兜底 Exception 放最后。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "MyBatis 动态 SQL 怎么做多条件查询？字段可能为空。"
+      },
+      {
+        "role": "assistant",
+        "content": "```xml\n<select id=\"searchUsers\" resultType=\"User\">\n    SELECT * FROM t_user\n    <where>\n        <if test=\"name != null and name != ''\">\n            AND name LIKE CONCAT('%', #{name}, '%')\n        </if>\n        <if test=\"status != null\">\n            AND status = #{status}\n        </if>\n        <if test=\"createTimeStart != null\">\n            AND create_time >= #{createTimeStart}\n        </if>\n        <if test=\"createTimeEnd != null\">\n            AND create_time &lt;= #{createTimeEnd}\n        </if>\n        <if test=\"deptIds != null and deptIds.size() > 0\">\n            AND dept_id IN\n            <foreach collection=\"deptIds\" item=\"id\" open=\"(\" separator=\",\" close=\")\">\n                #{id}\n            </foreach>\n        </if>\n    </where>\n    ORDER BY create_time DESC\n</select>\n```\n\n**注意**：\n- 用 `<where>` 代替手写 `WHERE 1=1`，MyBatis 自动去掉多余的 AND\n- `<if>` 判断空：`null` 和空字符串都要判断\n- 集合判空：`deptIds.size() > 0`\n- LIKE 用 `CONCAT` 防 SQL 注入，不要用 `${}`"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java 线程池怎么配？核心线程数、最大线程数怎么定？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// CPU 密集型：线程数 = CPU 核数 + 1\nint cpuCores = Runtime.getRuntime().availableProcessors();\nThreadPoolExecutor cpuPool = new ThreadPoolExecutor(\n    cpuCores, cpuCores + 1,\n    60L, TimeUnit.SECONDS,\n    new LinkedBlockingQueue<>(1000),\n    new ThreadPoolExecutor.CallerRunsPolicy()\n);\n\n// IO 密集型：线程数 = CPU 核数 * 2\nThreadPoolExecutor ioPool = new ThreadPoolExecutor(\n    cpuCores * 2, cpuCores * 5,\n    60L, TimeUnit.SECONDS,\n    new LinkedBlockingQueue<>(2000),\n    new ThreadPoolExecutor.CallerRunsPolicy()\n);\n```\n\n**拒绝策略选择**：\n- `CallerRunsPolicy`：让提交线程自己执行，不丢任务（推荐）\n- `AbortPolicy`：抛异常，适合任务不能丢但要有感知\n- `DiscardPolicy`：静默丢弃，适合不重要的任务\n\n**实际经验**：\n- 核心线程数从不应该凭空猜，用监控数据定\n- 队列不是越大越好，突发流量堆满队列反而 OOM\n- 线程池一定要监控：`getQueue().size()`、`getActiveCount()`"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "@Transactional 在同一个类里方法互相调用，为什么事务不生效？"
+      },
+      {
+        "role": "assistant",
+        "content": "因为 Spring 事务基于 AOP 代理。同一个类内部调用绕过了代理对象。\n\n```java\n@Service\npublic class UserService {\n\n    @Transactional\n    public void methodA() {\n        // this.methodB() — 直接调用，不走代理，B 的事务无效！\n        this.methodB();\n    }\n\n    @Transactional(propagation = Propagation.REQUIRES_NEW)\n    public void methodB() {\n        // 这个事务注解不会生效\n    }\n}\n```\n\n**解决方案（3种）**：\n\n```java\n// 1. 自己注入自己（推荐）\n@Service\npublic class UserService {\n    @Autowired\n    private UserService self;\n    \n    public void methodA() {\n        self.methodB();  // 通过代理调用，事务生效\n    }\n    \n    @Transactional\n    public void methodB() { }\n}\n\n// 2. 拆分到另一个 Service\n@Service\npublic class UserServiceB {\n    @Transactional\n    public void methodB() { }\n}\n\n// 3. 获取当前代理（需要暴露代理）\n// application.yml: spring.aop.proxy-target-class=true\nAopContext.currentProxy();\n```\n\n**注意**：`@Transactional` 只在 `public` 方法上生效（CGLIB 代理限制）。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "写一个线程安全的单例模式，双重检查锁"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\npublic class Singleton {\n    // volatile 防止指令重排\n    private static volatile Singleton instance;\n    \n    private Singleton() {\n        if (instance != null) {\n            throw new RuntimeException(\"反射攻击防御\");\n        }\n    }\n    \n    public static Singleton getInstance() {\n        if (instance == null) {           // 第一次检查\n            synchronized (Singleton.class) {\n                if (instance == null) {   // 第二次检查\n                    instance = new Singleton();\n                }\n            }\n        }\n        return instance;\n    }\n}\n```\n\n**为什么两次检查**：\n- 第一次：避免每次 getInstance 都要加锁（性能）\n- 第二次：防止多个线程同时通过第一次检查，重复创建实例\n\n**为什么 volatile**：\n`instance = new Singleton()` 实际分三步：\n1. 分配内存\n2. 初始化对象\n3. 将 instance 指向内存\n\nJVM 可能重排 2 和 3。线程 A 执行了 3 但还没执行 2，线程 B 读到非 null 但未初始化的对象就崩了。`volatile` 禁止这个重排。\n\n**JDK 5+ 更简单**：直接 `enum`，JVM 保证单例且防反射/序列化攻击。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Boot 如何实现接口限流？"
+      },
+      {
+        "role": "assistant",
+        "content": "**方案一：Guava RateLimiter（单机）**\n\n```java\n@Component\npublic class RateLimitInterceptor implements HandlerInterceptor {\n    private final RateLimiter limiter = RateLimiter.create(10.0); // 每秒 10 个\n    \n    @Override\n    public boolean preHandle(HttpServletRequest request, \n            HttpServletResponse response, Object handler) {\n        if (!limiter.tryAcquire(1, TimeUnit.SECONDS)) {\n            throw new BusinessException(429, \"请求太频繁，请稍后\");\n        }\n        return true;\n    }\n}\n```\n\n**方案二：Redis + Lua（分布式）**\n\n```java\n@Component\npublic class RedisRateLimiter {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    private static final String SCRIPT = \n        \"local key = KEYS[1] \" +\n        \"local limit = tonumber(ARGV[1]) \" +\n        \"local window = tonumber(ARGV[2]) \" +\n        \"local current = redis.call('INCR', key) \" +\n        \"if current == 1 then \" +\n        \"    redis.call('EXPIRE', key, window) \" +\n        \"end \" +\n        \"if current > limit then return 0 end \" +\n        \"return 1\";\n    \n    public boolean tryAcquire(String key, int limit, int seconds) {\n        Long result = redis.execute(\n            new DefaultRedisScript<>(SCRIPT, Long.class),\n            Collections.singletonList(key),\n            String.valueOf(limit), String.valueOf(seconds)\n        );\n        return result != null && result == 1;\n    }\n}\n// 使用：\nif (!rateLimiter.tryAcquire(\"api:login:\" + userId, 5, 60)) {\n    throw new BusinessException(429, \"操作太频繁\");\n}\n```\n\n**方案三：注解式（最优雅）**\n\n```java\n@Target(ElementType.METHOD)\n@Retention(RetentionPolicy.RUNTIME)\npublic @interface RateLimit {\n    int limit() default 10;\n    int seconds() default 1;\n}\n\n// AOP 拦截：\n@Around(\"@annotation(rateLimit)\")\npublic Object around(ProceedingJoinPoint pjp, RateLimit rateLimit) {\n    String key = pjp.getSignature().toShortString();\n    if (!redisLimiter.tryAcquire(key, rateLimit.limit(), rateLimit.seconds())) {\n        throw new BusinessException(429, \"请求过于频繁\");\n    }\n    return pjp.proceed();\n}\n\n// Controller 上直接用：\n@RateLimit(limit = 5, seconds = 60)\n@PostMapping(\"/login\")\npublic Result login(@RequestBody LoginDTO dto) { ... }\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "这段代码有内存泄漏风险，怎么改？\n```java\npublic class DataCache {\n    private static Map<String, byte[]> cache = new HashMap<>();\n    \n    public static void put(String key, byte[] data) {\n        cache.put(key, data);\n    }\n    \n    public static byte[] get(String key) {\n        return cache.get(key);\n    }\n}\n```"
+      },
+      {
+        "role": "assistant",
+        "content": "**问题**：HashMap 无限增长，byte[] 占内存，GC 无法回收，最终 OOM。\n\n**方案一：LRU 缓存（最常用）**\n\n```java\npublic class DataCache {\n    private static final Map<String, byte[]> cache = new LinkedHashMap<String, byte[]>(16, 0.75f, true) {\n        @Override\n        protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {\n            return size() > 100;  // 超过 100 个自动删最老的\n        }\n    };\n    \n    public static void put(String key, byte[] data) {\n        cache.put(key, data);\n    }\n    \n    public static byte[] get(String key) {\n        return cache.get(key);\n    }\n}\n```\n\n**方案二：Caffeine（生产推荐）**\n\n```java\npublic class DataCache {\n    private static final Cache<String, byte[]> cache = Caffeine.newBuilder()\n        .maximumSize(100)\n        .expireAfterWrite(10, TimeUnit.MINUTES)\n        .softValues()  // 内存不足时 GC 回收\n        .recordStats()\n        .build();\n    \n    public static void put(String key, byte[] data) {\n        cache.put(key, data);\n    }\n    \n    public static byte[] get(String key) {\n        return cache.getIfPresent(key);\n    }\n}\n```\n\n**方案三：WeakHashMap（特殊场景）**\n\n```java\nprivate static Map<String, byte[]> cache = new WeakHashMap<>();\n// key 没有外部引用时自动清除，适合 key 是对象的场景\n```\n\n**实际选择**：Caffeine > LinkedHashMap LRU > Guava Cache > WeakHashMap"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Boot 项目中大文件上传 OOM，怎么优化？"
+      },
+      {
+        "role": "assistant",
+        "content": "**配置层面**：\n\n```yaml\nspring:\n  servlet:\n    multipart:\n      max-file-size: 500MB\n      max-request-size: 500MB\n      # 关键：不把文件全读到内存\n      enabled: true\n      location: /tmp/upload-temp  # 写入临时目录\n```\n\n**代码层面**：\n\n```java\n@PostMapping(\"/upload\")\npublic Result<String> upload(@RequestParam(\"file\") MultipartFile file) {\n    // ❌ 错误：全部读入内存\n    byte[] bytes = file.getBytes();\n    \n    // ✅ 正确：流式写入\n    Path target = Paths.get(\"/data/uploads/\" + file.getOriginalFilename());\n    try (InputStream in = file.getInputStream()) {\n        Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);\n    }\n    return Result.ok(\"上传成功\");\n}\n```\n\n**分片上传（>500MB）**：\n\n```java\n@PostMapping(\"/chunk\")\npublic Result<String> uploadChunk(\n    @RequestParam int chunk,     // 当前片号\n    @RequestParam int chunks,    // 总片数\n    @RequestParam String md5,    // 文件 MD5\n    @RequestParam MultipartFile file\n) {\n    Path chunkPath = Paths.get(\"/tmp/chunks/\" + md5 + \"/\" + chunk);\n    Files.createDirectories(chunkPath.getParent());\n    file.transferTo(chunkPath);\n    \n    if (chunk == chunks - 1) {\n        // 最后一片，合并\n        mergeChunks(md5, chunks);\n        return Result.ok(\"上传完成\");\n    }\n    return Result.ok(\"分片 \" + chunk + \" 上传成功\");\n}\n\nprivate void mergeChunks(String md5, int chunks) throws IOException {\n    Path target = Paths.get(\"/data/uploads/\" + md5);\n    try (OutputStream out = Files.newOutputStream(target)) {\n        for (int i = 0; i < chunks; i++) {\n            Path chunk = Paths.get(\"/tmp/chunks/\" + md5 + \"/\" + i);\n            Files.copy(chunk, out);\n            Files.delete(chunk);\n        }\n    }\n}\n```\n\n关键：永远用流式读写，别 `getBytes()` 一把梭。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "CompletableFuture 怎么实现多个异步任务全部完成后汇总结果？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 场景：同时查用户信息 + 订单列表 + 积分余额\npublic UserDashboard getDashboard(Long userId) {\n    CompletableFuture<User> userFuture = CompletableFuture\n        .supplyAsync(() -> userMapper.selectById(userId));\n    \n    CompletableFuture<List<Order>> orderFuture = CompletableFuture\n        .supplyAsync(() -> orderMapper.selectByUserId(userId));\n    \n    CompletableFuture<Integer> pointFuture = CompletableFuture\n        .supplyAsync(() -> pointService.getBalance(userId));\n    \n    // 等待所有完成\n    CompletableFuture<Void> all = CompletableFuture.allOf(\n        userFuture, orderFuture, pointFuture\n    );\n    \n    return all.thenApply(v -> {\n        User user = userFuture.join();      // join 直接抛异常\n        List<Order> orders = orderFuture.join();\n        Integer points = pointFuture.join();\n        return new UserDashboard(user, orders, points);\n    }).join();\n}\n\n// 带超时版本\npublic UserDashboard getDashboardTimeout(Long userId) {\n    CompletableFuture<User> userFuture = CompletableFuture\n        .supplyAsync(() -> userMapper.selectById(userId))\n        .orTimeout(3, TimeUnit.SECONDS);  // 3 秒超时\n    // ...\n    try {\n        return all.get(5, TimeUnit.SECONDS);\n    } catch (TimeoutException e) {\n        // 降级：返回缓存数据\n        return cache.get(userId);\n    }\n}\n\n// 任意一个完成就返回\npublic String fastestResponse() {\n    return CompletableFuture.anyOf(\n        CompletableFuture.supplyAsync(() -> callApiA()),\n        CompletableFuture.supplyAsync(() -> callApiB())\n    ).thenApply(Object::toString).join();\n}\n```\n注意：必须用自定义线程池，`supplyAsync()` 默认用 ForkJoinPool.commonPool()，多个异步任务会互相抢占。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "JPA @OneToMany 懒加载，序列化 JSON 时报 LazyInitializationException 怎么解决？"
+      },
+      {
+        "role": "assistant",
+        "content": "三种方案，按场景选：\n\n**方案一：@JsonIgnoreProperties + JOIN FETCH（推荐）**\n\n```java\n@Entity\npublic class User {\n    @OneToMany(mappedBy = \"user\", fetch = FetchType.LAZY)\n    @JsonIgnoreProperties(\"user\")  // 防止循环引用\n    private List<Order> orders;\n}\n\n// Repository 中显式 fetch\n@Query(\"SELECT u FROM User u JOIN FETCH u.orders WHERE u.id = :id\")\nOptional<User> findByIdWithOrders(@Param(\"id\") Long id);\n```\n\n**方案二：DTO 投影（生产推荐）**\n\n```java\n// 不返回 Entity，返回专用 DTO\npublic record UserDTO(Long id, String name, List<OrderDTO> orders) {}\npublic record OrderDTO(Long id, BigDecimal amount) {}\n\n@Query(\"SELECT new com.example.dto.UserDTO(u.id, u.name) FROM User u WHERE u.id = :id\")\nOptional<UserDTO> findUserDTO(@Param(\"id\") Long id);\n```\n\n**方案三：Open Session In View（不推荐）**\n\n```yaml\nspring.jpa.open-in-view: false  # 默认 true，强列建议关掉\n```\n\n实际选择：90% 场景用 DTO 投影，需要级联修改才用 Entity + JOIN FETCH。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "为什么说 SimpleDateFormat 是线程不安全的？多线程里怎么处理日期格式化？"
+      },
+      {
+        "role": "assistant",
+        "content": "`SimpleDateFormat` 内部有 Calendar 成员变量，多线程并发调用 `format/parse` 会互相覆盖 Calendar 的值，导致结果错乱甚至 ArrayIndexOutOfBoundsException。\n\n```java\n// ❌ 危险：多线程共享\nprivate static final SimpleDateFormat sdf = new SimpleDateFormat(\"yyyy-MM-dd\");\n\n// ✅ 方案一：ThreadLocal（JDK7 前）\nprivate static final ThreadLocal<SimpleDateFormat> holder = \n    ThreadLocal.withInitial(() -> new SimpleDateFormat(\"yyyy-MM-dd\"));\nString date = holder.get().format(new Date());\n\n// ✅ 方案二：DateTimeFormatter（JDK8+，推荐）\nprivate static final DateTimeFormatter fmt = DateTimeFormatter.ofPattern(\"yyyy-MM-dd\");\nString date = LocalDate.now().format(fmt);\n// DateTimeFormatter 不可变，天然线程安全\n\n// ✅ 方案三：每次 new（简单但多次调用有 GC 压力）\nString date = new SimpleDateFormat(\"yyyy-MM-dd\").format(new Date());\n```\n\n`DateTimeFormatter` 是 JDK8 的不可变类，无内部可变状态，直接多线程用，完美解决。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "MySQL 索引优化：这个查询很慢，怎么加索引？\n```sql\nSELECT * FROM orders \nWHERE user_id = 100 \nAND status = 'PAID' \nAND create_time > '2026-01-01'\nORDER BY create_time DESC\nLIMIT 20\n```"
+      },
+      {
+        "role": "assistant",
+        "content": "**分析**：\n- 等值条件：`user_id`, `status`\n- 范围条件：`create_time >`\n- 排序：`create_time DESC`\n\n**最左前缀原则**：等值在前，范围在后\n\n```sql\n-- 方案一：精准覆盖（推荐）\nALTER TABLE orders ADD INDEX idx_user_status_time (user_id, status, create_time);\n\n-- 为什么这个顺序？\n-- user_id 等值，放最前（过滤性最强）\n-- status 等值，放中间\n-- create_time 范围+排序，放最后（索引天然有序，避免 filesort）\n```\n\n**验证**：\n```sql\nEXPLAIN SELECT * FROM orders WHERE user_id=100 AND status='PAID' \nAND create_time > '2026-01-01' ORDER BY create_time DESC LIMIT 20;\n-- key: idx_user_status_time\n-- Extra: Using index condition  （✅ 好）\n-- 如果 Extra 有 Using filesort → 索引顺序不对\n```\n\n**进阶 — 覆盖索引**（不查 *，只查需要的列）：\n```sql\nALTER TABLE orders ADD INDEX idx_cover (user_id, status, create_time, amount);\nSELECT user_id, status, create_time, amount FROM orders \nWHERE user_id=100 AND status='PAID' AND create_time>'2026-01-01'\nORDER BY create_time DESC LIMIT 20;\n-- Extra: Using index  （✅ 最优，不回表）\n```\n\n**注意**：`status` 如果是低区分度字段（只有 3-5 个值），放中间收益有限，可以省略：\n```sql\nALTER TABLE orders ADD INDEX idx_user_time (user_id, create_time);\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring 事件机制怎么用？@EventListener 和 @TransactionalEventListener 区别？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 1. 定义事件\npublic class OrderPaidEvent extends ApplicationEvent {\n    private final Long orderId;\n    public OrderPaidEvent(Object source, Long orderId) {\n        super(source);\n        this.orderId = orderId;\n    }\n    public Long getOrderId() { return orderId; }\n}\n\n// 2. 发布事件\n@Service\npublic class OrderService {\n    @Autowired\n    private ApplicationEventPublisher publisher;\n    \n    @Transactional\n    public void pay(Long orderId) {\n        orderMapper.updateStatus(orderId, \"PAID\");\n        publisher.publishEvent(new OrderPaidEvent(this, orderId));\n    }\n}\n\n// 3. 监听事件\n@Component\npublic class OrderPaidListener {\n    \n    // @EventListener: 同步，事务提交前执行\n    @EventListener\n    public void sendSMS(OrderPaidEvent event) {\n        smsService.send(event.getOrderId());  // 短信可能失败，影响主事务\n    }\n    \n    // @TransactionalEventListener: 事务提交后执行\n    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)\n    public void grantPoints(OrderPaidEvent event) {\n        pointService.add(event.getOrderId());  // 事务已提交，数据已落库\n    }\n    \n    // 事务回滚后执行（补偿）\n    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)\n    public void compensate(OrderPaidEvent event) {\n        log.warn(\"订单 {} 支付失败，执行补偿\", event.getOrderId());\n    }\n    \n    // 异步\n    @Async\n    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)\n    public void asyncTask(OrderPaidEvent event) {\n        // 在独立线程执行，不影响主流程\n    }\n}\n```\n\n**选择**：\n- 必须和主事务一起成功/失败 → `@EventListener`\n- 主事务成功后执行、不影响主流程 → `@TransactionalEventListener(AFTER_COMMIT)`\n- 发短信/推送/记日志 → `AFTER_COMMIT + @Async`"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "JUnit 5 怎么写参数化测试？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\nclass CalculatorTest {\n    private final Calculator calc = new Calculator();\n\n    // 1. @ValueSource — 单参数\n    @ParameterizedTest\n    @ValueSource(ints = {1, 2, 3, 4, 5})\n    void squareShouldBeCorrect(int input) {\n        assertEquals(input * input, calc.square(input));\n    }\n\n    // 2. @CsvSource — 多参数 + 期望值\n    @ParameterizedTest\n    @CsvSource({\n        \"1, 2, 3\",\n        \"-1, 1, 0\",\n        \"100, 200, 300\"\n    })\n    void addShouldBeCorrect(int a, int b, int expected) {\n        assertEquals(expected, calc.add(a, b));\n    }\n\n    // 3. @MethodSource — 复杂数据\n    @ParameterizedTest\n    @MethodSource(\"provideDivisionData\")\n    void divideTest(int a, int b, int expected, Class<? extends Exception> exception) {\n        if (exception != null) {\n            assertThrows(exception, () -> calc.divide(a, b));\n        } else {\n            assertEquals(expected, calc.divide(a, b));\n        }\n    }\n    \n    static Stream<Arguments> provideDivisionData() {\n        return Stream.of(\n            Arguments.of(10, 2, 5, null),\n            Arguments.of(10, 0, 0, ArithmeticException.class),\n            Arguments.of(0, 5, 0, null)\n        );\n    }\n\n    // 4. @CsvFileSource — 从文件读\n    @ParameterizedTest\n    @CsvFileSource(resources = \"/test-data.csv\", numLinesToSkip = 1)\n    void fromCsv(int a, int b, int expected) {\n        assertEquals(expected, calc.add(a, b));\n    }\n}\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Redis 缓存穿透、击穿、雪崩怎么区别和解决？"
+      },
+      {
+        "role": "assistant",
+        "content": "| 问题 | 场景 | 原因 | 解决方案 |\n|------|------|------|----------|\n| **缓存穿透** | 查不存在的数据 | 缓存和 DB 都没有，直接打穿到 DB | 布隆过滤器 + 缓存空值 |\n| **缓存击穿** | 热点 Key 过期 | 大量并发同时查同一个过期 Key | 互斥锁 / 永不过期 |\n| **缓存雪崩** | 大量 Key 同时过期 | 缓存层大面积失效 | 过期时间加随机 / 多级缓存 |\n\n```java\n// 1. 缓存穿透：缓存空值\npublic User getById(Long id) {\n    String key = \"user:\" + id;\n    User user = (User) redis.get(key);\n    if (user != null) return user;\n    \n    // 空值标记\n    if (redis.exists(key + \":null\")) return null;\n    \n    user = db.findById(id);\n    if (user == null) {\n        redis.setex(key + \":null\", 60, \"1\");  // 空值缓存 1 分钟\n        return null;\n    }\n    redis.setex(key, 3600, user);\n    return user;\n}\n\n// 2. 缓存击穿：互斥锁\npublic User getByIdLock(Long id) {\n    String key = \"user:\" + id;\n    User user = (User) redis.get(key);\n    if (user != null) return user;\n    \n    String lockKey = \"lock:user:\" + id;\n    if (redis.setnx(lockKey, \"1\", 10)) {  // 抢锁\n        try {\n            user = db.findById(id);\n            redis.setex(key, 3600, user);\n            return user;\n        } finally {\n            redis.del(lockKey);\n        }\n    } else {\n        Thread.sleep(100);  // 等一等，再查缓存\n        return getByIdLock(id);\n    }\n}\n\n// 3. 缓存雪崩：过期时间加随机\nredis.setex(key, 3600 + new Random().nextInt(600), value);  // ±10 分钟\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "写一个生产者消费者模式，用 BlockingQueue"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\npublic class ProducerConsumer {\n    private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(100);\n    private volatile boolean running = true;\n    \n    public void start() {\n        // 生产者\n        new Thread(() -> {\n            int i = 0;\n            while (running) {\n                try {\n                    String task = \"Task-\" + (++i);\n                    queue.put(task);  // 队列满时阻塞\n                    System.out.println(\"生产: \" + task);\n                    Thread.sleep(100);\n                } catch (InterruptedException e) {\n                    Thread.currentThread().interrupt();\n                    break;\n                }\n            }\n        }, \"producer\").start();\n        \n        // 消费者（多线程）\n        for (int n = 0; n < 3; n++) {\n            new Thread(() -> {\n                while (running) {\n                    try {\n                        String task = queue.poll(2, TimeUnit.SECONDS);\n                        if (task == null) continue;\n                        System.out.println(Thread.currentThread().getName() + \" 消费: \" + task);\n                        Thread.sleep(300);  // 模拟处理\n                    } catch (InterruptedException e) {\n                        Thread.currentThread().interrupt();\n                        break;\n                    }\n                }\n            }, \"consumer-\" + n).start();\n        }\n    }\n    \n    public void stop() {\n        running = false;\n    }\n}\n\n// Java 8+ 更优雅：用 CompletableFuture + 线程池\nExecutor producer = Executors.newSingleThreadExecutor();\nExecutorService consumers = Executors.newFixedThreadPool(3);\n// ...\n```\n关键：`put()` 阻塞插入防 OOM，`poll(timeout)` 阻塞取出允许优雅退出。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "设计一个短链系统，核心算法怎么写？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n@Service\npublic class ShortUrlService {\n    private static final String BASE62 = \"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\";\n    private static final String DOMAIN = \"https://s.cn/\";\n    \n    @Autowired\n    private JdbcTemplate jdbc;\n    \n    public String shorten(String longUrl) {\n        // 1. 先查是否存在\n        String exist = jdbc.queryForObject(\n            \"SELECT short_code FROM short_url WHERE long_url = ?\", \n            String.class, longUrl\n        );\n        if (exist != null) return DOMAIN + exist;\n        \n        // 2. 插入记录，用自增 ID 生成短码\n        jdbc.update(\"INSERT INTO short_url (long_url) VALUES (?)\", longUrl);\n        Long id = jdbc.queryForObject(\"SELECT LAST_INSERT_ID()\", Long.class);\n        \n        // 3. ID → Base62\n        String code = toBase62(id);\n        jdbc.update(\"UPDATE short_url SET short_code = ? WHERE id = ?\", code, id);\n        return DOMAIN + code;\n    }\n    \n    public String redirect(String code) {\n        return jdbc.queryForObject(\n            \"SELECT long_url FROM short_url WHERE short_code = ?\",\n            String.class, code\n        );\n    }\n    \n    private String toBase62(long num) {\n        StringBuilder sb = new StringBuilder();\n        while (num > 0) {\n            sb.append(BASE62.charAt((int)(num % 62)));\n            num /= 62;\n        }\n        return sb.reverse().toString();\n    }\n}\n```\n\n**为什么用自增 ID？**\n- 天然不重复\n- Base62 编码后 7 位就能表示 62^7 ≈ 3.5 万亿个短链\n- 比 Hash 方案好：Hash 有碰撞风险，需要处理冲突"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "这段代码有什么问题？\n```java\npublic List<User> getActiveUsers() {\n    List<User> users = userMapper.selectAll();\n    return users.stream()\n        .filter(u -> u.getStatus() == 1)\n        .collect(Collectors.toList());\n}\n```"
+      },
+      {
+        "role": "assistant",
+        "content": "**问题**：全表查出来再内存过滤。数据量小还行，百万级直接 OOM。\n\n**正确做法**：\n\n```java\n// 1. 条件推给数据库\npublic List<User> getActiveUsers() {\n    return userMapper.selectByStatus(1);\n}\n\n// 2. MyBatis-Plus\npublic List<User> getActiveUsers() {\n    return userMapper.selectList(\n        new LambdaQueryWrapper<User>().eq(User::getStatus, 1)\n    );\n}\n\n// 3. 如果必须大批量处理，用游标（MyBatis）\n@Select(\"SELECT * FROM user WHERE status = 1\")\n@Options(resultSetType = ResultSetType.FORWARD_ONLY, fetchSize = 1000)\n@ResultType(User.class)\nvoid selectActiveUsers(ResultHandler<User> handler);\n\n// 使用\nuserMapper.selectActiveUsers(ctx -> {\n    User user = ctx.getResultObject();\n    // 逐条处理，不积累在内存\n    process(user);\n});\n```\n\n**原则**：过滤、排序、分页全部下推到数据库。Java 只负责业务逻辑。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Cloud Gateway 怎么做统一鉴权？写一个 GlobalFilter"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n@Component\npublic class AuthGlobalFilter implements GlobalFilter, Ordered {\n    \n    // 白名单\n    private static final List<String> WHITE_LIST = Arrays.asList(\n        \"/auth/login\", \"/auth/register\", \"/public/\"\n    );\n    \n    @Autowired\n    private JwtUtil jwtUtil;\n    \n    @Override\n    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {\n        String path = exchange.getRequest().getURI().getPath();\n        \n        // 白名单放行\n        if (WHITE_LIST.stream().anyMatch(path::startsWith)) {\n            return chain.filter(exchange);\n        }\n        \n        // 取 Token\n        String token = exchange.getRequest().getHeaders().getFirst(\"Authorization\");\n        if (token == null || !token.startsWith(\"Bearer \")) {\n            return unauthorized(exchange, \"缺少 Token\");\n        }\n        token = token.substring(7);\n        \n        // 验证\n        try {\n            Claims claims = jwtUtil.parseToken(token);\n            // 把用户信息传给下游\n            exchange.getRequest().mutate()\n                .header(\"X-User-Id\", claims.get(\"userId\").toString())\n                .header(\"X-User-Name\", claims.get(\"userName\").toString());\n            return chain.filter(exchange);\n        } catch (Exception e) {\n            return unauthorized(exchange, \"Token 无效或已过期\");\n        }\n    }\n    \n    private Mono<Void> unauthorized(ServerWebExchange exchange, String msg) {\n        exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);\n        exchange.getResponse().getHeaders().setContentType(MediaType.APPLICATION_JSON);\n        byte[] bytes = String.format(\"{\\\"code\\\":401,\\\"msg\\\":\\\"%s\\\"}\", msg).getBytes();\n        return exchange.getResponse().writeWith(\n            Mono.just(exchange.getResponse().bufferFactory().wrap(bytes))\n        );\n    }\n    \n    @Override\n    public int getOrder() { return -100; }  // 优先执行\n}\n```\n\nJWT 工具类：\n```java\n@Component\npublic class JwtUtil {\n    @Value(\"${jwt.secret}\")\n    private String secret;\n    \n    public Claims parseToken(String token) {\n        return Jwts.parserBuilder()\n            .setSigningKey(Keys.hmacShaKeyFor(secret.getBytes()))\n            .build()\n            .parseClaimsJws(token)\n            .getBody();\n    }\n    \n    public String generateToken(Long userId, String userName) {\n        return Jwts.builder()\n            .claim(\"userId\", userId)\n            .claim(\"userName\", userName)\n            .setIssuedAt(new Date())\n            .setExpiration(new Date(System.currentTimeMillis() + 86400000L))\n            .signWith(Keys.hmacShaKeyFor(secret.getBytes()))\n            .compact();\n    }\n}\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Nacos 做配置中心，怎么动态刷新 @Value 注解的值？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 方案一：@RefreshScope（推荐）\n@RestController\n@RefreshScope  // ← 关键注解\npublic class ConfigController {\n    \n    @Value(\"${app.switch:false}\")\n    private boolean switchEnabled;\n    \n    @GetMapping(\"/switch\")\n    public String getSwitch() {\n        return switchEnabled ? \"ON\" : \"OFF\";\n    }\n}\n\n// bootstrap.yml\nspring:\n  cloud:\n    nacos:\n      config:\n        server-addr: 127.0.0.1:8848\n        file-extension: yaml\n        refresh-enabled: true  # 开启自动刷新\n```\n\n```java\n// 方案二：@ConfigurationProperties（不需要 @RefreshScope）\n@Component\n@ConfigurationProperties(prefix = \"app\")\n@Data\npublic class AppConfig {\n    private boolean switchEnabled;\n    private int timeout;\n    private List<String> whiteList;\n}\n\n// 使用\n@RestController\npublic class ConfigController {\n    @Autowired\n    private AppConfig appConfig;\n    \n    @GetMapping(\"/config\")\n    public AppConfig getConfig() {\n        return appConfig;\n    }\n}\n```\n\n**区别**：\n- `@RefreshScope` 刷新时重建 Bean（有短暂停顿）\n- `@ConfigurationProperties` 直接更新属性值（推荐，性能更好）\n- 两者都支持 Nacos 控制台改配置后自动生效"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java 怎么优雅地关闭线程池？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\npublic class GracefulShutdown {\n    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(\n        4, 8, 60, TimeUnit.SECONDS,\n        new LinkedBlockingQueue<>(100)\n    );\n    \n    public void shutdown() {\n        // 1. 不再接受新任务\n        executor.shutdown();\n        \n        try {\n            // 2. 等待已有任务完成（最多 30 秒）\n            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {\n                // 3. 超时，强制中断\n                executor.shutdownNow();\n                // 4. 再等 10 秒\n                if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {\n                    log.error(\"线程池未能完全关闭\");\n                }\n            }\n        } catch (InterruptedException e) {\n            executor.shutdownNow();\n            Thread.currentThread().interrupt();\n        }\n    }\n    \n    // Spring Boot 中更简单\n    @Bean\n    public ThreadPoolTaskExecutor taskExecutor() {\n        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();\n        executor.setCorePoolSize(4);\n        executor.setMaxPoolSize(8);\n        executor.setWaitForTasksToCompleteOnShutdown(true);  // 等任务完成\n        executor.setAwaitTerminationSeconds(30);             // 最多等 30s\n        return executor;\n    }\n}\n```\n\n**注意**：`shutdownNow()` 试图中断正在执行的任务，但任务代码里要检查 `Thread.interrupted()` 才能响应。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "MyBatis-Plus 分页插件怎么配置？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 1. 配置分页插件\n@Configuration\npublic class MybatisPlusConfig {\n    @Bean\n    public MybatisPlusInterceptor mybatisPlusInterceptor() {\n        MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();\n        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));\n        return interceptor;\n    }\n}\n\n// 2. 使用\n@Service\npublic class UserService {\n    @Autowired\n    private UserMapper userMapper;\n    \n    public Page<User> pageUsers(int pageNo, int pageSize, String keyword) {\n        Page<User> page = new Page<>(pageNo, pageSize);\n        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()\n            .like(StringUtils.hasText(keyword), User::getName, keyword)\n            .orderByDesc(User::getCreateTime);\n        return userMapper.selectPage(page, wrapper);\n    }\n}\n\n// 3. 返回统一格式\npublic record PageResult<T>(long total, int pages, List<T> records) {\n    public static <T> PageResult<T> of(Page<T> page) {\n        return new PageResult<>(page.getTotal(), (int) page.getPages(), page.getRecords());\n    }\n}\n```\n\n注意：分页后如果要联表，需要手写 SQL，插件不支持多表分页。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "怎么避免 if-else 地狱？给几个实际例子"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// ❌ if-else 地狱\npublic BigDecimal calculate(String type, BigDecimal amount) {\n    if (\"VIP\".equals(type)) {\n        return amount.multiply(new BigDecimal(\"0.8\"));\n    } else if (\"SVIP\".equals(type)) {\n        return amount.multiply(new BigDecimal(\"0.7\"));\n    } else if (\"NORMAL\".equals(type)) {\n        return amount.multiply(new BigDecimal(\"0.95\"));\n    } else {\n        return amount;\n    }\n}\n\n// ✅ 方案一：策略模式 + 枚举\npublic enum DiscountStrategy {\n    VIP(amount -> amount.multiply(new BigDecimal(\"0.8\"))),\n    SVIP(amount -> amount.multiply(new BigDecimal(\"0.7\"))),\n    NORMAL(amount -> amount.multiply(new BigDecimal(\"0.95\")));\n    \n    private final Function<BigDecimal, BigDecimal> calc;\n    DiscountStrategy(Function<BigDecimal, BigDecimal> calc) { this.calc = calc; }\n    public BigDecimal apply(BigDecimal amount) { return calc.apply(amount); }\n}\npublic BigDecimal calculate(String type, BigDecimal amount) {\n    return DiscountStrategy.valueOf(type).apply(amount);\n}\n\n// ✅ 方案二：Map + Lambda（更灵活）\nprivate static final Map<String, Function<BigDecimal, BigDecimal>> STRATEGIES = Map.of(\n    \"VIP\", a -> a.multiply(new BigDecimal(\"0.8\")),\n    \"SVIP\", a -> a.multiply(new BigDecimal(\"0.7\")),\n    \"NORMAL\", a -> a.multiply(new BigDecimal(\"0.95\"))\n);\npublic BigDecimal calculate(String type, BigDecimal amount) {\n    return STRATEGIES.getOrDefault(type, Function.identity()).apply(amount);\n}\n\n// ✅ 方案三：责任链（适合有顺序的判断）\ninterface Handler {\n    boolean canHandle(Request req);\n    void handle(Request req);\n}\n// 每个 Handler 实现 canHandle + handle，主流程遍历 Handler 链\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Boot 怎么实现接口幂等？重复提交怎么办？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 方案一：Token 机制（推荐）\n// 1. 页面加载时获取 token\n@GetMapping(\"/token\")\npublic Result<String> getToken() {\n    String token = UUID.randomUUID().toString();\n    redis.setex(\"idempotent:\" + token, 300, \"1\");\n    return Result.ok(token);\n}\n\n// 2. 提交时带上 token，验证后删除\n@PostMapping(\"/order\")\npublic Result createOrder(@RequestHeader(\"Idempotent-Token\") String token) {\n    if (!redis.del(\"idempotent:\" + token)) {  // del 返回 false = key 不存在\n        return Result.fail(\"请勿重复提交\");\n    }\n    // 执行业务\n    orderService.create();\n    return Result.ok();\n}\n\n// 方案二：注解 + AOP\n@Target(ElementType.METHOD)\n@Retention(RetentionPolicy.RUNTIME)\npublic @interface Idempotent {\n    String key() default \"\";\n    int expireSeconds() default 5;\n}\n\n@Aspect\n@Component\npublic class IdempotentAspect {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    @Around(\"@annotation(idempotent)\")\n    public Object around(ProceedingJoinPoint pjp, Idempotent idempotent) throws Throwable {\n        HttpServletRequest request = ((ServletRequestAttributes)\n            RequestContextHolder.currentRequestAttributes()).getRequest();\n        String key = idempotent.key() + \":\" + request.getHeader(\"Idempotent-Token\");\n        \n        if (Boolean.FALSE.equals(redis.delete(key))) {\n            return Result.fail(\"请勿重复提交\");\n        }\n        return pjp.proceed();\n    }\n}\n\n// 使用\n@Idempotent(key = \"order:create\")\n@PostMapping(\"/order\")\npublic Result createOrder() { ... }\n```\n\n关键：Redis `del` 天然原子，`setnx` + `expire` 也可以但要保证原子性。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Docker 部署 Spring Boot 应用，Dockerfile 怎么写比较好？"
+      },
+      {
+        "role": "assistant",
+        "content": "```dockerfile\n# 多阶段构建，最终镜像 < 200MB\nFROM maven:3.9-eclipse-temurin-17 AS build\nWORKDIR /app\nCOPY pom.xml .\nRUN mvn dependency:go-offline -B  # 缓存依赖层\nCOPY src ./src\nRUN mvn package -DskipTests -B\n\n# 运行阶段\nFROM eclipse-temurin:17-jre-alpine\nRUN addgroup -S app && adduser -S app -G app\nUSER app\nWORKDIR /app\nCOPY --from=build /app/target/*.jar app.jar\n\n# JVM 参数\nENV JAVA_OPTS=\"-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200\"\n\nEXPOSE 8080\nENTRYPOINT [\"sh\", \"-c\", \"java $JAVA_OPTS -jar app.jar\"]\n```\n\n**docker-compose.yml**：\n```yaml\nversion: '3.8'\nservices:\n  app:\n    build: .\n    ports: [\"8080:8080\"]\n    environment:\n      SPRING_PROFILES_ACTIVE: docker\n    depends_on:\n      mysql:\n        condition: service_healthy\n    healthcheck:\n      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8080/actuator/health\"]\n      interval: 30s\n    deploy:\n      resources:\n        limits:\n          memory: 512M\n```\n\n**关键优化**：\n- 多阶段构建：最终镜像不含 Maven/GCC\n- 分层缓存：pom.xml 先 COPY，依赖变动少时缓存命中\n- 非 root 运行：`USER app`\n- alpine 镜像：从 600MB 压到 150MB"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Git 回滚操作：已经 push 到远程的提交怎么撤销？"
+      },
+      {
+        "role": "assistant",
+        "content": "```bash\n# 场景一：撤销最近一次提交，保留改动\n# 适用：刚推完发现漏了东西\ngit reset --soft HEAD~1\ngit push --force-with-lease  # 比 --force 安全，会检查远程是否有新提交\n\n# 场景二：撤销最近一次提交，丢弃改动\ngit reset --hard HEAD~1\ngit push --force-with-lease\n\n# 场景三：回滚到指定提交（推荐，保留历史）\n# 适用：多人协作，不能改历史\ngit revert HEAD    # 撤销最近一次\ngit revert abc123  # 撤销指定 commit\ngit push\n\n# 场景四：已经有人基于你的提交做了开发\n# 只能 revert，不能 reset！\ngit revert <commit-hash>\n```\n\n**选择**：\n- 个人分支 / 还没人基于它开发 → `reset --force-with-lease`\n- 主分支 / 多人协作 → `revert`\n- **绝对不要对 main/master 做 force push**"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java 对象拷贝，BeanUtils.copyProperties vs MapStruct 怎么选？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// ❌ Apache BeanUtils — 慢，反射\nBeanUtils.copyProperties(dest, source);\n\n// ⚠️ Spring BeanUtils — 还行，但还是反射\n// 忽略某些字段\nBeanUtils.copyProperties(source, dest, \"id\", \"createTime\");\n\n// ✅ MapStruct — 编译期生成代码，零反射（推荐）\n@Mapper(componentModel = \"spring\")\npublic interface UserConverter {\n    UserConverter INSTANCE = Mappers.getMapper(UserConverter.class);\n    \n    @Mapping(target = \"fullName\", expression = \"java(user.getFirstName() + user.getLastName())\")\n    @Mapping(target = \"id\", ignore = true)\n    UserDTO toDTO(User user);\n    \n    List<UserDTO> toDTOList(List<User> users);\n}\n\n// 使用\nUserDTO dto = UserConverter.INSTANCE.toDTO(user);\n```\n\n**性能对比**（100 万次拷贝）：\n- Apache BeanUtils: ~2500ms\n- Spring BeanUtils: ~800ms\n- MapStruct: ~20ms（编译期生成，等于手写 setter）\n\n**结论**：永远用 MapStruct。如果只是偶尔拷贝一两个字段，手写更清晰。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring Boot 启动慢，怎么排查和优化？"
+      },
+      {
+        "role": "assistant",
+        "content": "```bash\n# 1. 看启动耗时分布\njava -jar app.jar --spring-startup-analyzer-enabled=true\n# 或\njava -Dspring.context.report=true -jar app.jar\n\n# 2. 看哪些 Bean 初始化慢\n# application.yml\nspring:\n  main:\n    lazy-initialization: true  # 全局懒加载（慎用）\n```\n\n```java\n// 3. 按需懒加载\n@Component\n@Lazy  // 用到时才初始化\npublic class HeavyService { ... }\n\n// 4. 减少自动配置\n@SpringBootApplication(exclude = {\n    DataSourceAutoConfiguration.class,  // 不需要的\n    SecurityAutoConfiguration.class\n})\n\n// 5. 启动时不扫描无关包\n@ComponentScan(basePackages = \"com.example.app\")\n```\n\n**典型耗时分布**：\n- Bean 初始化: 40%（优化：@Lazy）\n- 自动配置: 30%（优化：exclude 不需要的）\n- 类路径扫描: 15%（优化：缩小扫描范围）\n- Tomcat 启动: 10%（优化：用 Undertow，快 30%）\n- 其他: 5%"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Java 17/21 有哪些值得升级的新特性？"
+      },
+      {
+        "role": "assistant",
+        "content": "**Java 17 LTS（2021）**\n\n```java\n// 1. Record — 不可变数据载体\npublic record Point(int x, int y) {}\n// 自动生成：构造器、getter、equals、hashCode、toString\nvar p = new Point(3, 5);\nSystem.out.println(p.x());  // 访问器不是 getX()，是 x()\n\n// 2. Sealed Classes — 限制继承\npublic sealed class Shape permits Circle, Rectangle, Triangle {}\npublic final class Circle extends Shape {}\n// 只有 permits 列表中的类能继承\n\n// 3. Pattern Matching for switch\nObject obj = \"hello\";\nString result = switch (obj) {\n    case Integer i -> \"整数: \" + i;\n    case String s -> \"字符串长度: \" + s.length();\n    case null -> \"null\";\n    default -> \"未知类型\";\n};\n\n// 4. Text Blocks — 多行字符串\nString json = \"\"\"\n    {\n        \"name\": \"张三\",\n        \"age\": 25\n    }\n    \"\"\";\n\n// 5. 增强的 NullPointerException\n// JDK 17 会精确指出哪个变量是 null:\n// a.b.c.d() → Cannot invoke \"C.d()\" because \"b.c\" is null\n```\n\n**Java 21 LTS（2023）**\n\n```java\n// 1. Virtual Threads — 协程\n// 可以创建百万级轻量线程\nThread.startVirtualThread(() -> {\n    System.out.println(\"虚拟线程运行中\");\n});\n\n// 线程池写法\nExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();\nexecutor.submit(() -> fetchFromDB());\n\n// 2. Record Patterns\nif (obj instanceof Point(int x, int y)) {\n    System.out.println(x + \",\" + y);  // 直接解构\n}\n\n// 3. SequencedCollection — 有序集合统一接口\nList<String> list = new ArrayList<>();\nlist.getFirst();  // 原来 list.get(0)\nlist.getLast();   // 原来 list.get(list.size()-1)\n```\n\n**升级建议**：\n- 17 LTS：生产稳定，推荐升级\n- 21 LTS：Virtual Threads 在 IO 密集场景提升巨大\n- 如果还在用 8/11，直接跳到 17，不要停在中间版本"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "用 Java 实现一个 LRU 缓存"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\npublic class LRUCache<K, V> extends LinkedHashMap<K, V> {\n    private final int capacity;\n    \n    public LRUCache(int capacity) {\n        super(capacity, 0.75f, true);  // accessOrder=true 按访问排序\n        this.capacity = capacity;\n    }\n    \n    @Override\n    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {\n        return size() > capacity;\n    }\n    \n    public static void main(String[] args) {\n        LRUCache<String, String> cache = new LRUCache<>(3);\n        cache.put(\"a\", \"1\");\n        cache.put(\"b\", \"2\");\n        cache.put(\"c\", \"3\");\n        cache.get(\"a\");           // a 变最新\n        cache.put(\"d\", \"4\");      // b 被淘汰\n        System.out.println(cache); // {c=3, a=1, d=4}\n    }\n}\n\n// 手写版（面试用）\nclass LRUCacheManual {\n    static class Node {\n        int key, value;\n        Node prev, next;\n        Node(int k, int v) { key = k; value = v; }\n    }\n    \n    private final int capacity;\n    private final Map<Integer, Node> map = new HashMap<>();\n    private final Node head = new Node(0, 0);  // 哨兵头\n    private final Node tail = new Node(0, 0);  // 哨兵尾\n    \n    public LRUCacheManual(int capacity) {\n        this.capacity = capacity;\n        head.next = tail;\n        tail.prev = head;\n    }\n    \n    public int get(int key) {\n        Node node = map.get(key);\n        if (node == null) return -1;\n        moveToHead(node);\n        return node.value;\n    }\n    \n    public void put(int key, int value) {\n        Node node = map.get(key);\n        if (node != null) {\n            node.value = value;\n            moveToHead(node);\n        } else {\n            node = new Node(key, value);\n            map.put(key, node);\n            addToHead(node);\n            if (map.size() > capacity) {\n                Node last = removeTail();\n                map.remove(last.key);\n            }\n        }\n    }\n    \n    private void addToHead(Node node) {\n        node.prev = head;\n        node.next = head.next;\n        head.next.prev = node;\n        head.next = node;\n    }\n    \n    private void removeNode(Node node) {\n        node.prev.next = node.next;\n        node.next.prev = node.prev;\n    }\n    \n    private void moveToHead(Node node) {\n        removeNode(node);\n        addToHead(node);\n    }\n    \n    private Node removeTail() {\n        Node node = tail.prev;\n        removeNode(node);\n        return node;\n    }\n}\n```\n\n面试常考手写版。理解双向链表 + HashMap 的组合。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "设计模式：观察者模式在 Spring 中怎么用？"
+      },
+      {
+        "role": "assistant",
+        "content": "Spring 事件机制就是观察者模式的实现。\n\n```java\n// 1. 定义事件\npublic class UserRegisteredEvent extends ApplicationEvent {\n    private final User user;\n    public UserRegisteredEvent(Object source, User user) {\n        super(source);\n        this.user = user;\n    }\n    public User getUser() { return user; }\n}\n\n// 2. 发布者（被观察者）\n@Service\npublic class UserService {\n    @Autowired\n    private ApplicationEventPublisher publisher;\n    \n    @Transactional\n    public User register(RegisterDTO dto) {\n        User user = saveUser(dto);\n        publisher.publishEvent(new UserRegisteredEvent(this, user));\n        return user;\n    }\n}\n\n// 3. 观察者 1 — 发欢迎短信\n@Component\npublic class WelcomeSmsListener {\n    @Async\n    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)\n    public void onUserRegistered(UserRegisteredEvent event) {\n        smsService.sendWelcome(event.getUser().getPhone());\n    }\n}\n\n// 4. 观察者 2 — 初始化积分\n@Component\npublic class PointsInitListener {\n    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)\n    public void onUserRegistered(UserRegisteredEvent event) {\n        pointsService.init(event.getUser().getId(), 100);\n    }\n}\n```\n\n**优势**：发布者和观察者完全解耦。新增观察者不需要改 UserService 一行代码。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "两个线程交替打印奇偶数，怎么写？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\npublic class AlternatePrint {\n    private int num = 1;\n    private final Object lock = new Object();\n    \n    public void printOdd() {\n        synchronized (lock) {\n            while (num <= 100) {\n                while (num % 2 == 0) {\n                    lock.wait();  // 偶数时等待\n                }\n                if (num > 100) break;\n                System.out.println(\"奇数线程: \" + num++);\n                lock.notify();\n            }\n        }\n    }\n    \n    public void printEven() {\n        synchronized (lock) {\n            while (num <= 100) {\n                while (num % 2 == 1) {\n                    lock.wait();  // 奇数时等待\n                }\n                if (num > 100) break;\n                System.out.println(\"偶数线程: \" + num++);\n                lock.notify();\n            }\n        }\n    }\n    \n    public static void main(String[] args) {\n        AlternatePrint ap = new AlternatePrint();\n        new Thread(ap::printOdd).start();\n        new Thread(ap::printEven).start();\n    }\n}\n\n// Java 21 Virtual Thread 版本（更简单）\npublic class AlternatePrint21 {\n    public static void main(String[] args) throws Exception {\n        var lock = new Object();\n        var num = new AtomicInteger(1);\n        \n        Thread odd = Thread.startVirtualThread(() -> {\n            while (num.get() <= 100) {\n                synchronized (lock) {\n                    if (num.get() % 2 == 1) {\n                        System.out.println(\"奇: \" + num.getAndIncrement());\n                    }\n                }\n            }\n        });\n        // even thread similar...\n        odd.join();\n    }\n}\n```\n\n面试高频题。核心是 `wait/notify` 或 `Lock/Condition`。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "MyBatis 二级缓存怎么开启？有什么坑？"
+      },
+      {
+        "role": "assistant",
+        "content": "```xml\n<!-- 1. 全局开启 -->\n<settings>\n    <setting name=\"cacheEnabled\" value=\"true\"/>\n</settings>\n\n<!-- 2. Mapper XML 加标签 -->\n<mapper namespace=\"com.example.UserMapper\">\n    <cache \n        eviction=\"LRU\"\n        flushInterval=\"60000\"\n        size=\"512\"\n        readOnly=\"true\"/>\n</mapper>\n\n<!-- 3. 单条语句控制 -->\n<select id=\"selectById\" resultType=\"User\" useCache=\"true\">\n    SELECT * FROM user WHERE id = #{id}\n</select>\n```\n\n```java\n// 实体类要实现 Serializable\npublic class User implements Serializable {\n    private static final long serialVersionUID = 1L;\n    // ...\n}\n```\n\n**坑**：\n\n1. **脏读**：多服务实例共享 DB 时，A 实例改了数据，B 实例的二级缓存不知道\n   → 解决：用 Redis 替代 MyBatis 二级缓存\n\n2. **关联查询**：缓存了 User，但 User 关联的 Order 变了，缓存不更新\n   → 解决：关联数据多的表不要开缓存\n\n3. **事务内**：一级缓存优先，事务内看不到二级缓存\n   → 理解即可，设计如此\n\n4. **内存爆炸**：大表开缓存 → OOM\n   → 解决：只对频繁读、少改的小表开\n\n**建议**：90% 场景用 Redis 做业务缓存，不要用 MyBatis 二级缓存。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "写一个线程安全的计数器，要求高性能"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// 方案一：AtomicLong（推荐，最常用）\npublic class Counter {\n    private final AtomicLong count = new AtomicLong(0);\n    \n    public long increment() { return count.incrementAndGet(); }\n    public long get() { return count.get(); }\n}\n\n// 方案二：LongAdder（高并发，比 AtomicLong 更快）\npublic class HighConcurrencyCounter {\n    private final LongAdder count = new LongAdder();\n    \n    public void increment() { count.increment(); }\n    public long get() { return count.sum(); }\n}\n\n// 方案三：分段计数器（极致性能，自己实现）\npublic class StripedCounter {\n    private final AtomicLong[] counters;\n    \n    public StripedCounter(int stripes) {\n        counters = new AtomicLong[stripes];\n        for (int i = 0; i < stripes; i++) {\n            counters[i] = new AtomicLong();\n        }\n    }\n    \n    public void increment() {\n        int idx = Thread.currentThread().hashCode() % counters.length;\n        counters[Math.abs(idx)].incrementAndGet();\n    }\n    \n    public long get() {\n        return Arrays.stream(counters).mapToLong(AtomicLong::get).sum();\n    }\n}\n```\n\n**性能对比**（100 线程各加 100 万次）：\n- `synchronized`：3000ms\n- `AtomicLong`：800ms\n- `LongAdder`：200ms\n- `StripedCounter`：150ms\n\n**结论**：一般用 AtomicLong，高并发用 LongAdder。不要自己写分段计数器，JVM 团队的 LongAdder 已经最优了。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "MySQL 死锁怎么排查和解决？"
+      },
+      {
+        "role": "assistant",
+        "content": "```sql\n-- 1. 查看最近一次死锁\nSHOW ENGINE INNODB STATUS;\n-- 找 \"LATEST DETECTED DEADLOCK\" 段落\n\n-- 2. 看当前锁等待\nSELECT * FROM information_schema.INNODB_TRX;           -- 当前事务\nSELECT * FROM information_schema.INNODB_LOCKS;         -- 当前锁（8.0+ 用下一条）\nSELECT * FROM performance_schema.data_locks;            -- 8.0 版本\nSELECT * FROM information_schema.INNODB_LOCK_WAITS;    -- 锁等待\n```\n\n**常见死锁场景**：\n\n```java\n// 场景一：不同顺序更新同一批记录\n// 事务 A: UPDATE account SET balance=balance-100 WHERE id=1;\n//          UPDATE account SET balance=balance+100 WHERE id=2;\n// 事务 B: UPDATE account SET balance=balance-50 WHERE id=2;\n//          UPDATE account SET balance=balance+50 WHERE id=1;\n// → 死锁！\n\n// 解决：统一更新顺序\n@Transactional\npublic void transfer(Long from, Long to, BigDecimal amount) {\n    // 按 ID 排序，小的先锁\n    Long first = Math.min(from, to);\n    Long second = Math.max(from, to);\n    accountMapper.lock(first);\n    accountMapper.lock(second);\n    // 然后更新\n}\n\n// 场景二：间隙锁冲突\n// 事务 A: SELECT * FROM user WHERE id BETWEEN 10 AND 20 FOR UPDATE;\n// 事务 B: INSERT INTO user(id) VALUES(15);\n// → 间隙锁导致插入等待\n\n// 解决：用 RC 隔离级别（少用间隙锁）\n// SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;\n```\n\n**预防**：统一加锁顺序 + 缩小事务范围 + 索引优化减少锁范围。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "Spring AOP 的代理原理，JDK 动态代理和 CGLIB 区别？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// JDK 动态代理：基于接口\npublic interface UserService {\n    void save(User user);\n}\npublic class UserServiceImpl implements UserService {\n    public void save(User user) { ... }\n}\n\n// 生成的代理类：$Proxy implements UserService\n// 只能代理接口方法，final 方法无法代理\n\n// CGLIB 代理：基于继承\npublic class UserService {\n    public void save(User user) { ... }\n}\n\n// 生成的代理类：UserService$$EnhancerByCGLIB extends UserService\n// 可以代理任意类，但不能代理 final 类/方法\n```\n\n**Spring 的选择**（Spring Boot 2.x+）：\n```yaml\nspring.aop.proxy-target-class: true  # 默认，强制 CGLIB\n```\n\n**区别**：\n\n| 特性 | JDK 动态代理 | CGLIB |\n|------|-------------|-------|\n| 实现方式 | 实现接口 | 继承类 |\n| 性能 | 创建快，调用慢（反射） | 创建慢，调用快 |\n| 限制 | 必须有接口 | 不能代理 final |\n| Spring 默认 | 接口时用 | 无接口时用（Boot 2 强制） |\n\n**自调用陷阱**（两种代理都一样）：\n```java\npublic void methodA() {\n    this.methodB();  // ❌ 不走代理，AOP 不生效\n}\n@Transactional\npublic void methodB() {}\n// 解决：自己注入自己 / 拆分成两个 Bean\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "RESTful API 设计规范，给个实际项目的例子"
+      },
+      {
+        "role": "assistant",
+        "content": "```\n# 用户模块\nGET    /api/v1/users              # 列表（分页+筛选）\nPOST   /api/v1/users              # 创建\nGET    /api/v1/users/{id}         # 详情\nPUT    /api/v1/users/{id}         # 全量更新\nPATCH  /api/v1/users/{id}         # 部分更新\nDELETE /api/v1/users/{id}         # 删除\n\n# 子资源\nGET    /api/v1/users/{id}/orders  # 用户的订单\n\n# 动作（非 CRUD 用动词）\nPOST   /api/v1/orders/{id}/cancel\nPOST   /api/v1/orders/{id}/pay\n\n# 批量\nPOST   /api/v1/users/batch-delete  # Body: [1,2,3]\n```\n\n**统一响应格式**：\n```json\n{\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": { \"id\": 1, \"name\": \"张三\" },\n  \"timestamp\": 1716998400000\n}\n\n// 分页\n{\n  \"code\": 200,\n  \"data\": {\n    \"records\": [...],\n    \"total\": 100,\n    \"page\": 1,\n    \"pageSize\": 20\n  }\n}\n```\n\n**规范要点**：\n- 名词复数：`/users` 不是 `/user`\n- 版本号：`/api/v1/`\n- 不用动词做 URL：`POST /users` 不是 `POST /createUser`\n- 查询用 GET + Query Param：`GET /users?status=1&page=1`\n- 创建用 POST，更新用 PUT/PATCH"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "user",
+        "content": "为什么说 String 是不可变的？有什么好处？"
+      },
+      {
+        "role": "assistant",
+        "content": "```java\n// String 类声明为 final，内部用 final byte[] 存数据\npublic final class String {\n    private final byte[] value;  // JDK 9+ 用 byte[] 替代 char[]\n    // 所有修改操作都返回新 String\n    public String concat(String str) { ... }  // 返回新的\n    public String substring(int begin) { ... } // 返回新的\n}\n\n// 看起来像修改，其实创建了新对象\nString s = \"hello\";\ns = s + \" world\";  // 创建了新 String，s 指向新对象\n```\n\n**好处**：\n\n1. **线程安全**：不可变 → 天然线程安全 → 无需同步\n2. **字符串常量池**：相同字符串共享同一对象，节省内存\n```java\nString a = \"hello\";\nString b = \"hello\";\nSystem.out.println(a == b);  // true，同一个对象\n```\n3. **Hash 缓存**：hashCode 计算一次后缓存，HashMap 的 Key 性能好\n```java\npublic int hashCode() {\n    int h = hash;\n    if (h == 0 && value.length > 0) {\n        hash = h = computeHash();  // 只算一次\n    }\n    return h;\n}\n```\n4. **安全**：不会被子类恶意修改（final class）\n\n**代价**：频繁拼接产生大量临时对象 → 用 StringBuilder"
+      }
+    ]
+  }
+]
