@@ -1,156 +1,96 @@
 # Java 蒸馏语料库
 
-从 DeepSeek-V4 生成的 40 条高质量 Java 训练数据，用于 fine-tune 小模型。
+> 40 条 DeepSeek-V4 生成的高质量 Java 训练数据 · 一键蒸馏脚本 · RTX 4060 实测可用
 
-## 语料内容
+## 🎮 你的机器配置
 
-| 类别 | 条数 | 覆盖 |
-|------|------|------|
-| Spring Boot | 10 条 | 全局异常、限流、幂等、事件机制、AOP、启动优化... |
-| 并发集合 | 10 条 | 线程池、CompletableFuture、HashMap/CHM、LRU、计数器... |
-| 微服务运维 | 10 条 | Gateway 鉴权、Nacos、Docker、Git、死锁排查... |
-| Java 核心 | 10 条 | Record/VT、Stream、JUnit5、RESTful、String、设计模式... |
+| 部件 | 型号 |
+|------|------|
+| GPU | RTX 4060 (8GB) |
+| 推理 | Ollama 已安装 |
 
-## 格式
+## ⚡ 三步出模型
 
-标准 **ShareGPT 格式**，兼容 LLaMA-Factory / Axolotl / Unsloth：
-
-```json
-[
-  {
-    "conversations": [
-      {"role": "user", "content": "Java中HashMap和ConcurrentHashMap有什么区别？"},
-      {"role": "assistant", "content": "核心区别：\n**HashMap**\n- 非线程安全..."}
-    ]
-  }
-]
-```
-
-## 蒸馏步骤
-
-### 1. 环境准备
+### 第一步：克隆
 
 ```bash
-git clone https://github.com/hiyouga/LLaMA-Factory.git
-cd LLaMA-Factory
-pip install -e ".[torch,metrics]"
+git clone https://github.com/youdianwuliao/java-distill-corpus.git
+cd java-distill-corpus
 ```
 
-### 2. 放入语料
+### 第二步：蒸馏（30 分钟）
 
 ```bash
-cp java-corpus-sharegpt.json LLaMA-Factory/data/
-```
-
-在 `data/dataset_info.json` 末尾添加：
-
-```json
-"java_corpus": {
-  "file_name": "java-corpus-sharegpt.json",
-  "formatting": "sharegpt",
-  "columns": {
-    "messages": "conversations"
-  }
-}
-```
-
-### 3. 选基座模型（推荐）
-
-```bash
-# 方案 A: Qwen2.5-Coder-7B（推荐，Java 效果最好）
-# 方案 B: DeepSeek-Coder-1.3B（轻量，4G 显存可跑）
-# 方案 C: CodeLlama-7B（通用性强）
-```
-
-### 4. 开始训练
-
-```bash
-# QLoRA 微调（消费级显卡，8G 显存）
-llamafactory-cli train \
-  --model_name_or_path Qwen/Qwen2.5-Coder-7B-Instruct \
-  --dataset java_corpus \
-  --template qwen \
-  --finetuning_type lora \
-  --lora_rank 8 \
-  --per_device_train_batch_size 2 \
-  --gradient_accumulation_steps 4 \
-  --learning_rate 5e-5 \
-  --num_train_epochs 3 \
-  --output_dir ./output/java-expert
-```
-
-### 5. 导出模型
-
-```bash
-# 合并 LoRA 权重
-llamafactory-cli export \
-  --model_name_or_path Qwen/Qwen2.5-Coder-7B-Instruct \
-  --adapter_name_or_path ./output/java-expert \
-  --template qwen \
-  --export_dir ./java-expert-merged
-```
-
-### 6. 本地运行
-
-```bash
-# Ollama
-ollama create java-expert -f Modelfile
-ollama run java-expert
-```
-
-## 硬件要求
-
-| 方案 | 基座模型 | 显存 | 训练时间 |
-|------|----------|------|----------|
-| QLoRA | Qwen2.5-Coder-7B | 8GB | ~30min |
-| QLoRA | DeepSeek-Coder-1.3B | 4GB | ~15min |
-| Full | Qwen2.5-Coder-7B | 24GB | ~2h |
-
-## 效果
-
-蒸馏后的 7B 模型在 Java 相关问题上能达到原模型 80-90% 的水平：
-
-- ✅ Spring Boot / MyBatis 代码生成
-- ✅ 并发编程、线程池配置
-- ✅ Bug 定位和修复建议
-- ✅ 单元测试生成
-- ⚠️ 复杂架构设计不如大模型
-- ⚠️ 新 API / 框架可能编造
-
-## 扩展
-
-语料太少？用大模型继续生成更多：
-
-```bash
-# 用你喜欢的任何大模型，按这个格式生成更多 JSON
-# 然后追加到 java-corpus-sharegpt.json
-```
-
-建议总量：3000-5000 条效果最佳。
----
-
-## 最终模型
-
-模型文件太大（7GB+），无法直接放 GitHub。蒸馏完成后自动输出到：
-
-```
-./java-expert-merged/     ← 完整模型（可直接用 Ollama 加载）
-./output/java-expert/     ← LoRA 适配器权重（仅几 MB，可单独分发）
-```
-
-**建议**：把 LoRA 权重（`output/java-expert/`）上传到 Hugging Face，别人下载后和基座模型合并即可。
-
-```bash
-# 上传到 Hugging Face
-huggingface-cli upload your-username/java-expert-lora ./output/java-expert
-```
-
----
-
-## 一键蒸馏
-
-```bash
-# 在 GPU 机器上（≥8GB 显存）
 bash distill.sh
-# 大约 30 分钟后，模型出现在 ./java-expert-merged/
+```
+
+> ⚠️ 插电！笔记本训练时功耗 80-100W，电池撑不住。
+> ⚠️ 笔记本垫高或架起来，风扇会全速转。
+
+### 第三步：测试
+
+```bash
+ollama run java-expert
+>>> Spring Boot 全局异常处理怎么写？
+```
+
+---
+
+## 📊 语料覆盖
+
+| 类别 | 条数 | 典型问题 |
+|------|------|----------|
+| Spring | 10 | 全局异常、限流、幂等、事务失效、AOP、事件 |
+| 数据 | 10 | MyBatis 动态SQL、JPA 懒加载、Redis 穿透/击穿/雪崩、MySQL 索引/死锁 |
+| 并发 | 8 | 线程池、CompletableFuture、CHM、生产者消费者、计数器 |
+| 运维 | 6 | Gateway、Nacos、Docker、Git、启动优化 |
+| 基础 | 6 | Stream、Record/VT、JUnit5、LRU、单例、RESTful |
+
+---
+
+## 🔧 distill.sh 做了什么
+
+```
+1. 检查 GPU → 安装 PyTorch + Transformers + PEFT
+2. 克隆 LLaMA-Factory
+3. 下载语料 + 注册数据集
+4. 下载 Qwen2.5-Coder-7B + QLoRA 训练
+   ├── 4-bit 量化（显存占用 ~5.5GB）
+   ├── LoRA rank=8, batch=1, accumulation=8
+   ├── fp16 + gradient checkpointing
+   └── 3 epochs, ~25-35 分钟
+5. 合并 LoRA → 完整模型
+6. 导入 Ollama
+```
+
+---
+
+## ⚙️ 参数说明
+
+| 参数 | 值 | 原因 |
+|------|-----|------|
+| `load_in_4bit` | true | 8GB 显存必备，否则 OOM |
+| `batch_size` | 1 | 4060 显存限制 |
+| `gradient_accumulation` | 8 | 等效 batch=8 |
+| `lora_rank` | 8 | 40 条语料够用，rank 太高反而过拟合 |
+| `fp16` | true | 4060 支持，比 bf16 省显存 |
+| `max_length` | 2048 | 语料平均 1200 token，2048 足够 |
+
+---
+
+## 📁 项目结构
+
+```
+java-distill-corpus/
+├── README.md                  ← 本文
+├── distill.sh                 ← 一键蒸馏（RTX 4060 优化版）
+├── java-corpus-sharegpt.json  ← 40 条合并语料
+├── batch-01~04-*.json         ← 分类语料
+└── .gitignore
+```
+
+训练后新增：
+```
+├── output/java-expert/        ← LoRA 适配器（几 MB）
+└── java-expert-merged/        ← 完整模型（7GB）
 ```
