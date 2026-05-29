@@ -127,3 +127,30 @@ ollama run java-expert
 ```
 
 建议总量：3000-5000 条效果最佳。
+---
+
+## 最终模型
+
+模型文件太大（7GB+），无法直接放 GitHub。蒸馏完成后自动输出到：
+
+```
+./java-expert-merged/     ← 完整模型（可直接用 Ollama 加载）
+./output/java-expert/     ← LoRA 适配器权重（仅几 MB，可单独分发）
+```
+
+**建议**：把 LoRA 权重（`output/java-expert/`）上传到 Hugging Face，别人下载后和基座模型合并即可。
+
+```bash
+# 上传到 Hugging Face
+huggingface-cli upload your-username/java-expert-lora ./output/java-expert
+```
+
+---
+
+## 一键蒸馏
+
+```bash
+# 在 GPU 机器上（≥8GB 显存）
+bash distill.sh
+# 大约 30 分钟后，模型出现在 ./java-expert-merged/
+```
