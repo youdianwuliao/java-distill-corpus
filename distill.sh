@@ -1,36 +1,91 @@
 #!/bin/bash
 # ================================================================
-# Java 蒸馏 — RTX 4060 笔记本专用（8GB 显存）
-#
-# 用法:
-#   bash distill.sh
-#
-# 前提:
-#   - Windows/Linux + RTX 4060 (8GB)
-#   - 已安装 CUDA 12.x 驱动
-#   - 已安装 Ollama
-#   - 50GB 磁盘空间
+# Java 蒸馏 — Deepin/RTX 4060 版
+# 用法: bash distill.sh
+# 需要: Deepin Linux + RTX 4060 (8GB) + Ollama + 50GB 磁盘
 # ================================================================
 set -e
 
-echo "🪶 千羽 Java 蒸馏 — RTX 4060 版"
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# ===== 0. 环境检查 =====
+echo -e "${GREEN}🪶 千羽 Java 蒸馏 — Deepin + RTX 4060${NC}"
 echo ""
+
+# ===== 0. 系统环境检查 =====
 echo "===== 环境检查 ====="
-nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "⚠️ 未检测到 NVIDIA GPU"
-echo "Python: $(python3 --version)"
-echo "磁盘: $(df -h . | tail -1 | awk '{print $4}') 可用"
 
-# ===== 1. 安装依赖 =====
+# 检查 GPU
+if ! nvidia-smi &>/dev/null; then
+    echo "❌ 没检测到 NVIDIA 驱动！"
+    echo "   Deepin 安装驱动:"
+    echo "   sudo apt install nvidia-driver nvidia-cuda-toolkit"
+    echo "   然后重启: sudo reboot"
+    exit 1
+fi
+GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)
+echo "✅ GPU: $GPU"
+
+# 检查 CUDA
+CUDA_VER=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' 2>/dev/null || echo "未知")
+echo "✅ CUDA: $CUDA_VER"
+
+# 检查 Python
+PY_VER=$(python3 --version 2>/dev/null || echo "未安装")
+echo "✅ $PY_VER"
+
+# 检查磁盘
+DISK=$(df -h . | tail -1 | awk '{print $4}')
+echo "✅ 磁盘可用: $DISK"
+
+# 安装系统依赖 (Deepin/Debian)
 echo ""
-echo "===== 1/6 安装依赖 ====="
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 -q 2>&1 | tail -1
+echo "===== 安装系统依赖 ====="
+if ! dpkg -l build-essential &>/dev/null 2>&1; then
+    echo "安装 build-essential..."
+    sudo apt update -qq && sudo apt install -y -qq build-essential python3-pip python3-venv git curl
+fi
+
+# 检查 pip
+if ! python3 -m pip --version &>/dev/null 2>&1; then
+    echo "安装 pip..."
+    sudo apt install -y -qq python3-pip
+fi
+
+# 创建虚拟环境（避免污染系统 Python）
+if [ ! -d "venv" ]; then
+    echo "创建 Python 虚拟环境..."
+    python3 -m venv venv
+fi
+source venv/bin/activate
+
+# ===== 1. 安装 Python 依赖 =====
+echo ""
+echo "===== 1/6 安装 Python 包 ====="
+
+# 确定 CUDA 版本对应的 PyTorch index
+CUDA_MAJOR=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1 2>/dev/null || echo "12")
+echo "CUDA 主版本: $CUDA_MAJOR"
+
+if [ "$CUDA_MAJOR" = "12" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+elif [ "$CUDA_MAJOR" = "11" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu118"
+else
+    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+fi
+
+pip install --upgrade pip -q
+pip install torch torchvision torchaudio --index-url "$TORCH_INDEX" 2>&1 | tail -1
 pip install transformers datasets accelerate peft bitsandbytes scipy -q 2>&1 | tail -1
 
-# ===== 2. 拉 LLaMA-Factory =====
+# 验证 CUDA
+python3 -c "import torch; print(f'✅ PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+
+# ===== 2. 获取 LLaMA-Factory =====
 echo ""
-echo "===== 2/6 获取 LLaMA-Factory ====="
+echo "===== 2/6 LLaMA-Factory ====="
 if [ ! -d "LLaMA-Factory" ]; then
     git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git
 fi
@@ -38,9 +93,9 @@ cd LLaMA-Factory
 pip install -e ".[torch]" -q 2>&1 | tail -1
 cd ..
 
-# ===== 3. 准备语料 =====
+# ===== 3. 语料 =====
 echo ""
-echo "===== 3/6 准备语料 ====="
+echo "===== 3/6 语料 ====="
 if [ ! -f "java-corpus-sharegpt.json" ]; then
     curl -sL "https://raw.githubusercontent.com/youdianwuliao/java-distill-corpus/main/java-corpus-sharegpt.json" \
         -o java-corpus-sharegpt.json
@@ -63,8 +118,8 @@ PY
 
 # ===== 4. 训练 =====
 echo ""
-echo "===== 4/6 开始训练（约 25-35 分钟）====="
-echo "⚠️ 训练期间笔记本会发热，插电 + 垫高散热！"
+echo "===== 4/6 训练（约 25-35 分钟）====="
+echo -e "${YELLOW}⚠️ 插电 + 垫高散热！${NC}"
 
 cd LLaMA-Factory
 
@@ -96,7 +151,7 @@ llamafactory-cli train \
 
 cd ..
 
-# ===== 5. 合并模型 =====
+# ===== 5. 合并 =====
 echo ""
 echo "===== 5/6 合并模型 ====="
 cd LLaMA-Factory
@@ -111,7 +166,7 @@ cd ..
 
 # ===== 6. 导入 Ollama =====
 echo ""
-echo "===== 6/6 导入 Ollama ====="
+echo "===== 6/6 Ollama ====="
 
 cat > Modelfile << 'OLLAMA'
 FROM ./java-expert-merged
@@ -131,17 +186,17 @@ PARAMETER stop "<|im_end|>"
 OLLAMA
 
 ollama create java-expert -f Modelfile
+deactivate
 
 echo ""
 echo "================================================"
-echo "  🎉 蒸馏完成！"
+echo -e "  ${GREEN}🎉 蒸馏完成！${NC}"
 echo ""
 echo "  测试:"
 echo "    ollama run java-expert"
 echo "    > Spring Boot 全局异常处理怎么写？"
 echo ""
-echo "  输出文件:"
+echo "  产出:"
 echo "    完整模型: ./java-expert-merged/"
 echo "    LoRA权重: ./output/java-expert/"
-echo "    Ollama:   ollama list | grep java-expert"
 echo "================================================"
