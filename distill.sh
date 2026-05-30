@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ================================================================
 # Java 蒸馏 — Deepin/RTX 4060 版
 # 用法: bash distill.sh
@@ -13,94 +13,67 @@ NC='\033[0m'
 echo -e "${GREEN}🪶 千羽 Java 蒸馏 — Deepin + RTX 4060${NC}"
 echo ""
 
-# ===== 0. 系统环境检查 =====
+# ===== 0. 检查 =====
 echo "===== 环境检查 ====="
 
-# 检查 GPU
 if ! nvidia-smi &>/dev/null; then
     echo "❌ 没检测到 NVIDIA 驱动！"
-    echo "   Deepin 安装驱动:"
-    echo "   sudo apt install nvidia-driver nvidia-cuda-toolkit"
-    echo "   然后重启: sudo reboot"
+    echo "   Deepin: sudo apt install nvidia-driver && sudo reboot"
     exit 1
 fi
-GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)
-echo "✅ GPU: $GPU"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+echo "CUDA: $(nvidia-smi | grep 'CUDA Version' | awk '{print $9}')"
+echo "Python: $(python3 --version)"
+echo "磁盘: $(df -h . | tail -1 | awk '{print $4}') 可用"
 
-# 检查 CUDA
-CUDA_VER=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' 2>/dev/null || echo "未知")
-echo "✅ CUDA: $CUDA_VER"
-
-# 检查 Python
-PY_VER=$(python3 --version 2>/dev/null || echo "未安装")
-echo "✅ $PY_VER"
-
-# 检查磁盘
-DISK=$(df -h . | tail -1 | awk '{print $4}')
-echo "✅ 磁盘可用: $DISK"
-
-# 安装系统依赖 (Deepin/Debian)
+# ===== 系统依赖 =====
 echo ""
 echo "===== 安装系统依赖 ====="
 if ! dpkg -l build-essential &>/dev/null 2>&1; then
     echo "安装 build-essential..."
     sudo apt update -qq && sudo apt install -y -qq build-essential python3-pip python3-venv git curl
 fi
-
-# 检查 pip
 if ! python3 -m pip --version &>/dev/null 2>&1; then
-    echo "安装 pip..."
     sudo apt install -y -qq python3-pip
 fi
 
-# 创建虚拟环境（避免污染系统 Python）
+# ===== 虚拟环境 =====
 if [ ! -d "venv" ]; then
     echo "创建 Python 虚拟环境..."
     python3 -m venv venv
 fi
 source venv/bin/activate
 
-# ===== 1. 安装 Python 依赖 =====
+# ===== 1. Python 包 =====
 echo ""
 echo "===== 1/6 安装 Python 包 ====="
-
-# 所有下载都放在项目内（方便清理）
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME="$(pwd)/.cache/huggingface"
 export TORCH_HOME="$(pwd)/.cache/torch"
-echo "✅ HF 镜像: $HF_ENDPOINT"
-echo "✅ 缓存目录: .cache/""
+echo "HF 镜像: $HF_ENDPOINT"
+echo "缓存目录: .cache/"
 
-# 确定 CUDA 版本对应的 PyTorch index
-CUDA_MAJOR=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1 2>/dev/null || echo "12")
-echo "CUDA 主版本: $CUDA_MAJOR"
-
-if [ "$CUDA_MAJOR" = "12" ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
-elif [ "$CUDA_MAJOR" = "11" ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu118"
-else
-    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
-fi
+CUDA_MAJOR=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1)
+[ "$CUDA_MAJOR" = "11" ] && TORCH_INDEX="https://download.pytorch.org/whl/cu118" || TORCH_INDEX="https://download.pytorch.org/whl/cu121"
 
 pip install --upgrade pip -q
-pip install torch torchvision torchaudio --index-url "$TORCH_INDEX" 2>&1 | tail -1
-pip install transformers datasets accelerate peft bitsandbytes scipy -q 2>&1 | tail -1
+pip install torch torchvision torchaudio --index-url "$TORCH_INDEX" -q
+pip install transformers datasets accelerate peft bitsandbytes scipy -q
 
 # 验证 CUDA
-python3 << 'PYCHECK'
+python3 -c "
 import torch
-print(f"PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}")
-PYCHECK
+print('PyTorch', torch.__version__, 'CUDA:', torch.cuda.is_available())
+"
 
-# ===== 2. 获取 LLaMA-Factory =====
+# ===== 2. LLaMA-Factory =====
 echo ""
 echo "===== 2/6 LLaMA-Factory ====="
 if [ ! -d "LLaMA-Factory" ]; then
     git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git
 fi
 cd LLaMA-Factory
-pip install -e ".[torch]" -q 2>&1 | tail -1
+pip install -e ".[torch]" -q
 cd ..
 
 # ===== 3. 语料 =====
@@ -112,19 +85,19 @@ if [ ! -f "java-corpus-sharegpt.json" ]; then
 fi
 cp java-corpus-sharegpt.json LLaMA-Factory/data/
 
-python3 << 'PY'
+python3 -c "
 import json
-with open("LLaMA-Factory/data/dataset_info.json") as f:
+with open('LLaMA-Factory/data/dataset_info.json') as f:
     info = json.load(f)
-info["java_corpus"] = {
-    "file_name": "java-corpus-sharegpt.json",
-    "formatting": "sharegpt",
-    "columns": {"messages": "conversations"}
+info['java_corpus'] = {
+    'file_name': 'java-corpus-sharegpt.json',
+    'formatting': 'sharegpt',
+    'columns': {'messages': 'conversations'}
 }
-with open("LLaMA-Factory/data/dataset_info.json", "w") as f:
+with open('LLaMA-Factory/data/dataset_info.json', 'w') as f:
     json.dump(info, f, indent=2, ensure_ascii=False)
-print("✅ 数据集已注册")
-PY
+print('数据集已注册')
+"
 
 # ===== 4. 训练 =====
 echo ""
@@ -132,7 +105,7 @@ echo "===== 4/6 训练（约 25-35 分钟）====="
 echo -e "${YELLOW}⚠️ 插电 + 垫高散热！${NC}"
 
 export HF_ENDPOINT=https://hf-mirror.com
-export HF_HOME="$(pwd)/../.cache/huggingface"
+export HF_HOME="$(pwd)/.cache/huggingface"
 
 cd LLaMA-Factory
 
@@ -176,7 +149,7 @@ llamafactory-cli export \
     --export_legacy_format false
 cd ..
 
-# ===== 6. 导入 Ollama =====
+# ===== 6. Ollama =====
 echo ""
 echo "===== 6/6 Ollama ====="
 
@@ -204,11 +177,6 @@ echo ""
 echo "================================================"
 echo -e "  ${GREEN}🎉 蒸馏完成！${NC}"
 echo ""
-echo "  测试:"
-echo "    ollama run java-expert"
-echo "    > Spring Boot 全局异常处理怎么写？"
-echo ""
-echo "  产出:"
-echo "    完整模型: ./java-expert-merged/"
-echo "    LoRA权重: ./output/java-expert/"
+echo "  测试: ollama run java-expert"
+echo "  产出: java-expert-merged/  output/java-expert/"
 echo "================================================"
