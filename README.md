@@ -1,96 +1,141 @@
-# Java 蒸馏语料库
+# Java 蒸馏语料库 — 千羽 🪶
 
-> 40 条 DeepSeek-V4 生成的高质量 Java 训练数据 · 一键蒸馏脚本 · RTX 4060 实测可用
+> 从 DeepSeek-V4 生成的 60 条 Java 训练数据 → 1.5B QLoRA 微调 → Ollama 本地运行
 
-## 🎮 你的机器配置
-
-| 部件 | 型号 |
-|------|------|
-| GPU | RTX 4060 (8GB) |
-| 推理 | Ollama 已安装 |
-
-## ⚡ 三步出模型
-
-### 第一步：克隆
+## 一步到位
 
 ```bash
 git clone https://github.com/youdianwuliao/java-distill-corpus.git
 cd java-distill-corpus
-```
-
-### 第二步：蒸馏（30 分钟）
-
-```bash
 bash distill.sh
 ```
 
-> ⚠️ 插电！笔记本训练时功耗 80-100W，电池撑不住。
-> ⚠️ 笔记本垫高或架起来，风扇会全速转。
+脚本自动完成：环境检查 → 下载模型 + 语料 → QLoRA 训练 → GGUF 转换 → Ollama 导入
 
-### 第三步：测试
+**一键出模型** 🪶
+
+---
+
+## 📊 语料
+
+| 批次 | 覆盖 | 条数 |
+|------|------|------|
+| batch-01 | Spring Boot（全局异常、限流、幂等、事件...） | 10 |
+| batch-02 | 并发/数据（线程池、CompletableFuture、Redis...） | 10 |
+| batch-03 | 微服务（Gateway、Nacos、Docker、Git...） | 10 |
+| batch-04 | Java 核心（17/21新特性、LRU、设计模式...） | 10 |
+| batch-05 | Spring 进阶（多数据源、延迟队列、AOP日志...） | 10 |
+| batch-06 | 工具（枚举策略、Arthas、Linux、EasyExcel...） | 10 |
+
+格式：ShareGPT（`from/value`），LLaMA-Factory / 直接训练两用
+
+---
+
+## 🔧 手动步骤（如果不想全自动）
+
+### 1. 环境
 
 ```bash
+# Deepin / Ubuntu
+sudo apt install -y build-essential python3-pip python3-venv git curl
+
+# 虚拟环境
+python3 -m venv venv
+source venv/bin/activate
+
+# PyTorch + 依赖
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install transformers datasets peft accelerate
+```
+
+### 2. 训练
+
+```bash
+python3 << 'EOF'
+# transformers + peft 直接训练，不依赖 LLaMA-Factory
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer
+from peft import LoraConfig, get_peft_model
+import json
+
+# 加载 1.5B 模型 + 语料 → QLoRA 训练 3 轮
+# 详见 distill.sh 第 70-130 行
+EOF
+```
+
+### 3. 合并 + GGUF
+
+```bash
+# 获取 llama.cpp（Gitee 镜像，GitHub 可能连不上）
+git clone --depth 1 https://gitee.com/mirrors/llama.cpp.git
+cd llama.cpp && make -j4 && cd ..
+
+# 转 GGUF
+python3 llama.cpp/convert_hf_to_gguf.py \
+    java-expert-merged --outtype f16 --outfile java-expert.gguf
+```
+
+### 4. Ollama
+
+```bash
+ollama create java-expert -f Modelfile
 ollama run java-expert
->>> Spring Boot 全局异常处理怎么写？
+
+# 测试
+>>> 写个冒泡排序
 ```
 
 ---
 
-## 📊 语料覆盖
+## 🚀 如果重跑
 
-| 类别 | 条数 | 典型问题 |
-|------|------|----------|
-| Spring | 10 | 全局异常、限流、幂等、事务失效、AOP、事件 |
-| 数据 | 10 | MyBatis 动态SQL、JPA 懒加载、Redis 穿透/击穿/雪崩、MySQL 索引/死锁 |
-| 并发 | 8 | 线程池、CompletableFuture、CHM、生产者消费者、计数器 |
-| 运维 | 6 | Gateway、Nacos、Docker、Git、启动优化 |
-| 基础 | 6 | Stream、Record/VT、JUnit5、LRU、单例、RESTful |
-
----
-
-## 🔧 distill.sh 做了什么
-
-```
-1. 检查 GPU → 安装 PyTorch + Transformers + PEFT
-2. 克隆 LLaMA-Factory
-3. 下载语料 + 注册数据集
-4. 下载 Qwen2.5-Coder-7B + QLoRA 训练
-   ├── 4-bit 量化（显存占用 ~5.5GB）
-   ├── LoRA rank=8, batch=1, accumulation=8
-   ├── fp16 + gradient checkpointing
-   └── 3 epochs, ~25-35 分钟
-5. 合并 LoRA → 完整模型
-6. 导入 Ollama
+```bash
+bash clean.sh && bash distill.sh
+# 等 ~20 分钟（1.5B, 3 epochs, RTX 4060）
+# 自动出 ollama model: java-expert:latest
 ```
 
 ---
 
-## ⚙️ 参数说明
+## ⚙️ 参数
 
-| 参数 | 值 | 原因 |
+| 参数 | 值 | 说明 |
 |------|-----|------|
-| `load_in_4bit` | true | 8GB 显存必备，否则 OOM |
-| `batch_size` | 1 | 4060 显存限制 |
-| `gradient_accumulation` | 8 | 等效 batch=8 |
-| `lora_rank` | 8 | 40 条语料够用，rank 太高反而过拟合 |
-| `fp16` | true | 4060 支持，比 bf16 省显存 |
-| `max_length` | 2048 | 语料平均 1200 token，2048 足够 |
-
----
+| 基座模型 | Qwen2.5-Coder-1.5B-Instruct | 1.5B, 适合 8GB 显存 |
+| 训练方法 | QLoRA (4-bit) | 省显存 |
+| LoRA rank | 8 | 60 条语料够用 |
+| batch size | 1, accum 8 | 等效 batch=8 |
+| epochs | 3 | 不过拟合 |
+| fp16 | true | RTX 4060 支持 |
+| max_length | 1024 | 语料平均 800 token |
 
 ## 📁 项目结构
 
 ```
 java-distill-corpus/
-├── README.md                  ← 本文
-├── distill.sh                 ← 一键蒸馏（RTX 4060 优化版）
-├── java-corpus-sharegpt.json  ← 40 条合并语料
-├── batch-01~04-*.json         ← 分类语料
-└── .gitignore
+├── distill.sh              ← 一键执行（从零到 Ollama）
+├── clean.sh                ← 清理（删 venv + 模型 + 缓存）
+├── java-corpus-sharegpt.json  ← 60 条合并语料
+├── batch-01~06-*.json      ← 分批次原始数据
+├── .gitignore
+├── README.md               ← 本文
+├── venv/                   ← 虚拟环境（distill.sh 自动创建）
+├── .cache/huggingface/     ← 模型下载缓存（~3GB）
+├── output/java-expert/     ← LoRA 适配器
+├── java-expert-merged/     ← 合并后模型
+├── java-expert.gguf        ← GGUF 格式（Ollama 原生）
+├── llama.cpp/              ← 转换工具
+└── Modelfile               ← Ollama 配置
 ```
 
-训练后新增：
+## 🧪 测试
+
+```bash
+ollama run java-expert
+>>> Spring Boot 全局异常处理怎么写？
+>>> HashMap 和 ConcurrentHashMap 的区别？
+>>> 写一个单例模式
 ```
-├── output/java-expert/        ← LoRA 适配器（几 MB）
-└── java-expert-merged/        ← 完整模型（7GB）
-```
+
+---
+
+_千羽出品 🪶_
