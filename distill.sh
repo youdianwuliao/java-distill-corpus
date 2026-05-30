@@ -82,7 +82,9 @@ llamafactory-cli train \
     --warmup_ratio 0.1 \
     --num_train_epochs 3 \
     --logging_steps 1 \
-    --save_steps 1000 \
+    --save_steps 5 \
+    --save_total_limit 2 \
+    --save_strategy steps \
     --max_grad_norm 1.0 \
     --output_dir ../output/java-expert \
     --fp16 \
@@ -101,7 +103,12 @@ if [ $TRAIN_RESULT -ne 0 ]; then
 fi
 
 # 检查产出
-if [ ! -f "output/java-expert/adapter_config.json" ]; then
+# 找最新 checkpoint 检查产出
+CHECKPOINT=$(ls -d output/java-expert/checkpoint-* 2>/dev/null | sort -V | tail -1)
+CHECKDIR="output/java-expert"
+[ -n "$CHECKPOINT" ] && CHECKDIR="$CHECKPOINT"
+
+if [ ! -f "$CHECKDIR/adapter_config.json" ]; then
     echo ""
     echo -e "${YELLOW}训练未产出 adapter_config.json${NC}"
     echo "检查 output/ 目录内容："
@@ -111,18 +118,25 @@ if [ ! -f "output/java-expert/adapter_config.json" ]; then
     deactivate
     exit 1
 fi
-echo "✅ 训练产出确认"
+echo "✅ 训练产出确认: $CHECKDIR/adapter_config.json"
 
 step "4/5 合并模型"
 echo "手动合并 LoRA..."
 
+# 找最新 checkpoint
+ADAPTER_PATH="../output/java-expert"
+CHECKPOINT=$(ls -d ../output/java-expert/checkpoint-* 2>/dev/null | sort -V | tail -1)
+[ -n "$CHECKPOINT" ] && ADAPTER_PATH="$CHECKPOINT"
+echo "适配器: $ADAPTER_PATH"
+export ADAPTER_PATH="$ADAPTER_PATH"
+
 python3 << 'MERGE'
-import torch
+import torch, os
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
 model_path = "Qwen/Qwen2.5-Coder-7B-Instruct"
-adapter_path = "../output/java-expert"
+adapter_path = os.environ.get("ADAPTER_PATH", "../output/java-expert")
 output_path = "../java-expert-merged"
 
 print("加载基座模型...")
