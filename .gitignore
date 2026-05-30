@@ -1,2 +1,6 @@
 *.pyc
 __pycache__/
+.cache/
+output/
+java-expert-merged/
+Modelfile

@@ -64,9 +64,12 @@ source venv/bin/activate
 echo ""
 echo "===== 1/6 安装 Python 包 ====="
 
-# Hugging Face 镜像加速
+# 所有下载都放在项目内（方便清理）
 export HF_ENDPOINT=https://hf-mirror.com
-echo "✅ HF 镜像: $HF_ENDPOINT""
+export HF_HOME="$(pwd)/.cache/huggingface"
+export TORCH_HOME="$(pwd)/.cache/torch"
+echo "✅ HF 镜像: $HF_ENDPOINT"
+echo "✅ 缓存目录: .cache/""
 
 # 确定 CUDA 版本对应的 PyTorch index
 CUDA_MAJOR=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1 2>/dev/null || echo "12")
@@ -129,6 +132,7 @@ echo "===== 4/6 训练（约 25-35 分钟）====="
 echo -e "${YELLOW}⚠️ 插电 + 垫高散热！${NC}"
 
 export HF_ENDPOINT=https://hf-mirror.com
+export HF_HOME="$(pwd)/../.cache/huggingface"
 
 cd LLaMA-Factory
 
