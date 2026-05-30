@@ -1,0 +1,122 @@
+[
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 多数据源怎么配置？读写分离怎么做？"
+      },
+      {
+        "from": "gpt",
+        "value": "```yaml\nspring:\n  datasource:\n    master:\n      url: jdbc:mysql://localhost:3306/main_db\n      username: root\n      password: xxx\n      driver-class-name: com.mysql.cj.jdbc.Driver\n    slave:\n      url: jdbc:mysql://localhost:3307/main_db\n      username: root\n      password: xxx\n      driver-class-name: com.mysql.cj.jdbc.Driver\n```\n\n```java\n@Configuration\npublic class DataSourceConfig {\n    @Primary\n    @Bean(name = \"masterDataSource\")\n    @ConfigurationProperties(\"spring.datasource.master\")\n    public DataSource master() {\n        return DataSourceBuilder.create().build();\n    }\n    \n    @Bean(name = \"slaveDataSource\")\n    @ConfigurationProperties(\"spring.datasource.slave\")\n    public DataSource slave() {\n        return DataSourceBuilder.create().build();\n    }\n    \n    @Bean\n    public DataSource routingDataSource() {\n        Map<Object, Object> map = new HashMap<>();\n        map.put(\"master\", master());\n        map.put(\"slave\", slave());\n        \n        var routing = new AbstractRoutingDataSource() {\n            @Override\n            protected Object determineCurrentLookupKey() {\n                return DataSourceContext.get();\n            }\n        };\n        routing.setDefaultTargetDataSource(master());\n        routing.setTargetDataSources(map);\n        return routing;\n    }\n}\n\n// 用 ThreadLocal 切换\npublic class DataSourceContext {\n    private static final ThreadLocal<String> CONTEXT = new ThreadLocal<>();\n    public static void set(String type) { CONTEXT.set(type); }\n    public static String get() { return CONTEXT.get(); }\n    public static void clear() { CONTEXT.remove(); }\n}\n\n// AOP 自动切换读库\n@Aspect\n@Component\npublic class ReadOnlyAspect {\n    @Around(\"@annotation(transactional)\")\n    public Object around(ProceedingJoinPoint pjp, Transactional transactional) throws Throwable {\n        if (transactional.readOnly()) {\n            DataSourceContext.set(\"slave\");\n        }\n        try {\n            return pjp.proceed();\n        } finally {\n            DataSourceContext.clear();\n        }\n    }\n}\n```\n\n注意：事务内不能切换数据源，Spring 在事务开始时绑定连接。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "MyBatis-Plus 逻辑删除 + 自动填充怎么配？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 1. 实体类\n@Data\n@TableName(\"t_user\")\npublic class User {\n    @TableId(type = IdType.AUTO)\n    private Long id;\n    private String name;\n    \n    @TableLogic  // 逻辑删除\n    private Integer deleted;  // 0=正常, 1=删除\n    \n    @TableField(fill = FieldFill.INSERT)\n    private LocalDateTime createTime;\n    \n    @TableField(fill = FieldFill.INSERT_UPDATE)\n    private LocalDateTime updateTime;\n}\n\n// 2. 自动填充处理器\n@Component\npublic class MetaHandler implements MetaObjectHandler {\n    @Override\n    public void insertFill(MetaObject metaObject) {\n        this.strictInsertFill(metaObject, \"createTime\", LocalDateTime.class, LocalDateTime.now());\n        this.strictInsertFill(metaObject, \"updateTime\", LocalDateTime.class, LocalDateTime.now());\n    }\n    \n    @Override\n    public void updateFill(MetaObject metaObject) {\n        this.strictUpdateFill(metaObject, \"updateTime\", LocalDateTime.class, LocalDateTime.now());\n    }\n}\n\n// 3. 全局逻辑删除配置\nmybatis-plus:\n  global-config:\n    db-config:\n      logic-delete-field: deleted\n      logic-delete-value: 1\n      logic-not-delete-value: 0\n\n// 4. 使用\nuserMapper.deleteById(1L);\n// 实际 SQL: UPDATE t_user SET deleted=1 WHERE id=1 AND deleted=0\n\n// 查询自动过滤\nuserMapper.selectList(null);\n// 实际 SQL: SELECT * FROM t_user WHERE deleted=0\n```\n\n注意：逻辑删除后唯一索引可能冲突，在建表时需考虑 deleted 字段加入唯一索引。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 用 @Async 异步任务，怎么配置线程池和异常处理？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Configuration\n@EnableAsync\npublic class AsyncConfig implements AsyncConfigurer {\n    \n    @Bean(\"taskExecutor\")\n    public Executor taskExecutor() {\n        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();\n        executor.setCorePoolSize(4);\n        executor.setMaxPoolSize(8);\n        executor.setQueueCapacity(200);\n        executor.setThreadNamePrefix(\"async-\");\n        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());\n        executor.setWaitForTasksToCompleteOnShutdown(true);\n        executor.setAwaitTerminationSeconds(30);\n        executor.initialize();\n        return executor;\n    }\n    \n    @Override\n    public Executor getAsyncExecutor() {\n        return taskExecutor();\n    }\n    \n    @Override  // 全局异常处理\n    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {\n        return (ex, method, params) -> {\n            log.error(\"异步任务异常: {}.{} params={}\",\n                method.getDeclaringClass().getSimpleName(),\n                method.getName(), Arrays.toString(params), ex);\n        };\n    }\n}\n\n// 使用\n@Service\npublic class NotificationService {\n    @Async(\"taskExecutor\")\n    public CompletableFuture<String> sendAsync(Long userId) {\n        // 业务逻辑\n        return CompletableFuture.completedFuture(\"ok\");\n    }\n}\n```\n\n注意：@Async 方法必须 public，同类内部调用不生效（代理问题）。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "JPA N+1 问题怎么发现和解决？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// ❌ N+1 问题\n@Entity public class Order {\n    @ManyToOne(fetch = FetchType.EAGER)  // 或默认 LAZY\n    private User user;\n}\n// 查 10 个订单 → 1 条 SQL 查订单 + 10 条 SQL 查用户\n\n// ✅ 方案一：JOIN FETCH\n@Query(\"SELECT o FROM Order o JOIN FETCH o.user WHERE o.status = :status\")\nList<Order> findByStatusWithUser(@Param(\"status\") String status);\n\n// ✅ 方案二：EntityGraph\n@Entity\n@NamedEntityGraph(name = \"Order.user\", attributeNodes = @NamedAttributeNode(\"user\"))\npublic class Order { ... }\n\n@Repository\npublic interface OrderRepository extends JpaRepository<Order, Long> {\n    @EntityGraph(\"Order.user\")\n    List<Order> findByStatus(String status);\n}\n\n// ✅ 方案三：@BatchSize（全局）\n@Entity\npublic class User {\n    @BatchSize(size = 50)  // 一次查 50 个 User\n    @OneToMany(mappedBy = \"user\")\n    private List<Order> orders;\n}\n// 查 100 个 User 的订单 → 2 条 SQL（每 50 个一批）\n\n// 检测：开启 SQL 日志\nlogging.level.org.hibernate.SQL: DEBUG\nlogging.level.org.hibernate.type.descriptor.sql.BasicBinder: TRACE\n// 看日志里重复的 SELECT，就是 N+1\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Redis 分布式锁怎么写？注意什么问题？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Component\npublic class RedisLock {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    private static final String LOCK_PREFIX = \"lock:\";\n    \n    public boolean tryLock(String key, String value, long expireSeconds) {\n        return Boolean.TRUE.equals(\n            redis.opsForValue().setIfAbsent(\n                LOCK_PREFIX + key, value, expireSeconds, TimeUnit.SECONDS\n            )\n        );\n    }\n    \n    public void unlock(String key, String value) {\n        String script = \"if redis.call('get', KEYS[1]) == ARGV[1] then \" +\n                       \"return redis.call('del', KEYS[1]) else return 0 end\";\n        redis.execute(new DefaultRedisScript<>(script, Long.class),\n            Collections.singletonList(LOCK_PREFIX + key), value);\n    }\n    \n    // 使用\n    public void doSomething() {\n        String lockValue = UUID.randomUUID().toString();\n        if (!tryLock(\"order:123\", lockValue, 30)) {\n            throw new BusinessException(\"操作太频繁，请稍后\");\n        }\n        try {\n            // 业务逻辑\n        } finally {\n            unlock(\"order:123\", lockValue);\n        }\n    }\n}\n```\n\n**注意**：\n1. 解锁必须 Lua 脚本保证原子性（先判断 value 再删）\n2. 必须设过期时间，防死锁\n3. value 用 UUID，防止解错别人的锁\n4. **不要**先 setnx 再 expire（两步不原子）——用 setIfAbsent 的 expire 参数\n5. 生产环境用 Redisson（看门狗自动续期）"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "这段 SQL 太慢了，怎么优化？\n```sql\nSELECT o.*, u.name FROM orders o\nLEFT JOIN users u ON o.user_id = u.id\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC\nLIMIT 20\n```"
+      },
+      {
+        "from": "gpt",
+        "value": "先用 EXPLAIN 看：\n```sql\nEXPLAIN SELECT o.*, u.name FROM orders o\nLEFT JOIN users u ON o.user_id = u.id\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC LIMIT 20;\n```\n\n**典型问题**：\n1. type=ALL（全表扫描）→ 加索引\n2. Extra=Using filesort → 排序没走索引\n3. 如果是 LEFT JOIN 且 user_id 没索引 → JOIN 很慢\n\n**优化**：\n```sql\n-- 1. 联合索引（覆盖 WHERE + ORDER BY）\nALTER TABLE orders ADD INDEX idx_status_time (status, create_time);\n\n-- 2. users 表加 JOIN 索引\nALTER TABLE users ADD INDEX idx_id (id);  -- 如果有主键就不需要\n\n-- 3. 覆盖索引（不回表）\nALTER TABLE orders ADD INDEX idx_cover (status, create_time, user_id);\n-- 但 SELECT o.* 还是会回表，除非只查需要的列\n\n-- 优化后查询\nSELECT o.id, o.amount, o.create_time, u.name \nFROM orders o\nJOIN users u ON o.user_id = u.id  -- LEFT JOIN 改 JOIN（有 status 过滤不需要左连）\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC\nLIMIT 20;\n```\n\n**验证**：再跑 EXPLAIN，key 应该显示 `idx_status_time`，Extra 没有 Using filesort。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "@Scheduled 定时任务在集群环境怎么保证只执行一次？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 方案一：Redis 分布式锁（推荐）\n@Component\npublic class ScheduledTask {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    @Scheduled(cron = \"0 0 2 * * ?\")\n    public void cleanExpiredData() {\n        String lockKey = \"task:clean:lock\";\n        Boolean locked = redis.opsForValue()\n            .setIfAbsent(lockKey, \"1\", 60, TimeUnit.SECONDS);\n        if (Boolean.TRUE.equals(locked)) {\n            try {\n                // 执行任务\n                log.info(\"清理过期数据...\");\n            } finally {\n                redis.delete(lockKey);\n            }\n        }\n    }\n}\n\n// 方案二：ShedLock（专用框架）\n@SchedulerLock(name = \"cleanTask\", \n    lockAtMostFor = \"PT10M\",     // 最多锁 10 分钟\n    lockAtLeastFor = \"PT1M\")     // 至少锁 1 分钟\n@Scheduled(cron = \"0 0 2 * * ?\")\npublic void cleanTask() {\n    // 自动加锁解锁\n}\n\n// 方案三：XXL-JOB / PowerJob（分布式调度平台）\n// 自带任务分片、故障转移、控制台管理\n// Spring Boot 接入：\n@XxlJob(\"cleanTask\")\npublic void cleanTask() {\n    // 平台自动保证只有一个实例执行\n}\n```\n\n**选择**：简单场景用 Redis 锁，复杂调度用 XXL-JOB。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 日志怎么配置？怎么按级别输出到不同文件？"
+      },
+      {
+        "from": "gpt",
+        "value": "```xml\n<!-- logback-spring.xml -->\n<configuration>\n    <!-- 控制台 -->\n    <appender name=\"CONSOLE\" class=\"ch.qos.logback.core.ConsoleAppender\">\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 所有日志 -->\n    <appender name=\"FILE\" class=\"ch.qos.logback.core.rolling.RollingFileAppender\">\n        <file>logs/app.log</file>\n        <rollingPolicy class=\"ch.qos.logback.core.rolling.TimeBasedRollingPolicy\">\n            <fileNamePattern>logs/app.%d{yyyy-MM-dd}.log</fileNamePattern>\n            <maxHistory>30</maxHistory>\n        </rollingPolicy>\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 错误日志单独文件 -->\n    <appender name=\"ERROR_FILE\" class=\"ch.qos.logback.core.rolling.RollingFileAppender\">\n        <file>logs/error.log</file>\n        <filter class=\"ch.qos.logback.classic.filter.ThresholdFilter\">\n            <level>ERROR</level>\n        </filter>\n        <rollingPolicy class=\"ch.qos.logback.core.rolling.TimeBasedRollingPolicy\">\n            <fileNamePattern>logs/error.%d{yyyy-MM-dd}.log</fileNamePattern>\n        </rollingPolicy>\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 业务日志单独文件 -->\n    <logger name=\"com.example.business\" level=\"INFO\" additivity=\"false\">\n        <appender-ref ref=\"BUSINESS_FILE\"/>\n    </logger>\n    \n    <root level=\"INFO\">\n        <appender-ref ref=\"CONSOLE\"/>\n        <appender-ref ref=\"FILE\"/>\n        <appender-ref ref=\"ERROR_FILE\"/>\n    </root>\n</configuration>\n```\n\napplication.yml：\n```yaml\nlogging:\n  level:\n    root: INFO\n    com.example: DEBUG  # 自己的包开 DEBUG\n    org.springframework: WARN\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "AOP 实现接口调用日志，记录 Controller 的请求参数和响应"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Aspect\n@Component\n@Slf4j\npublic class ControllerLogAspect {\n    \n    @Around(\"execution(* com.example.controller..*.*(..))\")\n    public Object logAround(ProceedingJoinPoint pjp) throws Throwable {\n        long start = System.currentTimeMillis();\n        String method = pjp.getSignature().toShortString();\n        Object[] args = pjp.getArgs();\n        \n        // 不记录大对象和敏感字段\n        String params = Arrays.stream(args)\n            .filter(a -> !(a instanceof HttpServletRequest))\n            .filter(a -> !(a instanceof HttpServletResponse))\n            .map(a -> {\n                String s = JSON.toJSONString(a);\n                return s.length() > 500 ? s.substring(0, 500) : s;\n            })\n            .collect(Collectors.joining(\",\"));\n        \n        log.info(\"【请求】{} | 参数: {}\", method, params);\n        \n        Object result = pjp.proceed();\n        \n        String resp = JSON.toJSONString(result);\n        if (resp.length() > 1000) resp = resp.substring(0, 1000);\n        \n        log.info(\"【响应】{} | 耗时: {}ms | 结果: {}\",\n            method, System.currentTimeMillis() - start, resp);\n        \n        return result;\n    }\n}\n\n// 更优雅：自定义注解\n@Target(ElementType.METHOD)\n@Retention(RetentionPolicy.RUNTIME)\npublic @interface ApiLog {\n    String value() default \"\";\n    boolean logResult() default true;\n}\n\n@Around(\"@annotation(apiLog)\")\npublic Object logApi(ProceedingJoinPoint pjp, ApiLog apiLog) throws Throwable {\n    String desc = apiLog.value().isEmpty() ? \n        pjp.getSignature().getName() : apiLog.value();\n    log.info(\"【{}】开始\", desc);\n    Object result = pjp.proceed();\n    if (apiLog.logResult()) {\n        log.info(\"【{}】完成: {}\", desc, JSON.toJSONString(result));\n    }\n    return result;\n}\n\n// Controller 上加 @ApiLog(\"创建订单\") 即可\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "怎么设计一个可靠的延迟队列？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 方案一：Redis ZSet（最轻量）\n@Component\npublic class RedisDelayQueue {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    public void addTask(String task, long delaySeconds) {\n        long executeAt = System.currentTimeMillis() + delaySeconds * 1000;\n        redis.opsForZSet().add(\"delay:queue\", task, executeAt);\n    }\n    \n    @Scheduled(fixedDelay = 1000)\n    public void consume() {\n        long now = System.currentTimeMillis();\n        Set<String> tasks = redis.opsForZSet()\n            .rangeByScore(\"delay:queue\", 0, now, 0, 10);\n        if (tasks.isEmpty()) return;\n        \n        for (String task : tasks) {\n            // 原子移除（防并发）\n            if (redis.opsForZSet().remove(\"delay:queue\", task) > 0) {\n                try {\n                    process(task);\n                } catch (Exception e) {\n                    // 失败重试：重新加入队列\n                    addTask(task, 60);  // 60 秒后重试\n                }\n            }\n        }\n    }\n}\n\n// 方案二：RocketMQ 延迟消息\n// 发送:\nMessage msg = new Message(\"ORDER_TOPIC\", \"order:123\".getBytes());\nmsg.setDelayTimeLevel(3);  // 延迟等级 3 = 10 秒\nproducer.send(msg);\n\n// 方案三：RabbitMQ 死信队列\n@Configuration\npublic class DelayQueueConfig {\n    @Bean\n    public Queue delayQueue() {\n        return QueueBuilder.durable(\"delay.queue\")\n            .deadLetterExchange(\"dlx.exchange\")\n            .deadLetterRoutingKey(\"dlx.routing\")\n            .ttl(30000)  // 30 秒过期后进入死信队列\n            .build();\n    }\n}\n```\n\n**选择**：\n- 小规模/无 MQ：Redis ZSet\n- 中等规模：RabbitMQ 死信队列\n- 大规模/高可靠：RocketMQ 延迟消息"
+      }
+    ]
+  }
+]

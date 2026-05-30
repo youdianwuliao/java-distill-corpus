@@ -478,5 +478,245 @@
         "value": "```java\n// String 类声明为 final，内部用 final byte[] 存数据\npublic final class String {\n    private final byte[] value;  // JDK 9+ 用 byte[] 替代 char[]\n    // 所有修改操作都返回新 String\n    public String concat(String str) { ... }  // 返回新的\n    public String substring(int begin) { ... } // 返回新的\n}\n\n// 看起来像修改，其实创建了新对象\nString s = \"hello\";\ns = s + \" world\";  // 创建了新 String，s 指向新对象\n```\n\n**好处**：\n\n1. **线程安全**：不可变 → 天然线程安全 → 无需同步\n2. **字符串常量池**：相同字符串共享同一对象，节省内存\n```java\nString a = \"hello\";\nString b = \"hello\";\nSystem.out.println(a == b);  // true，同一个对象\n```\n3. **Hash 缓存**：hashCode 计算一次后缓存，HashMap 的 Key 性能好\n```java\npublic int hashCode() {\n    int h = hash;\n    if (h == 0 && value.length > 0) {\n        hash = h = computeHash();  // 只算一次\n    }\n    return h;\n}\n```\n4. **安全**：不会被子类恶意修改（final class）\n\n**代价**：频繁拼接产生大量临时对象 → 用 StringBuilder"
       }
     ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 多数据源怎么配置？读写分离怎么做？"
+      },
+      {
+        "from": "gpt",
+        "value": "```yaml\nspring:\n  datasource:\n    master:\n      url: jdbc:mysql://localhost:3306/main_db\n      username: root\n      password: xxx\n      driver-class-name: com.mysql.cj.jdbc.Driver\n    slave:\n      url: jdbc:mysql://localhost:3307/main_db\n      username: root\n      password: xxx\n      driver-class-name: com.mysql.cj.jdbc.Driver\n```\n\n```java\n@Configuration\npublic class DataSourceConfig {\n    @Primary\n    @Bean(name = \"masterDataSource\")\n    @ConfigurationProperties(\"spring.datasource.master\")\n    public DataSource master() {\n        return DataSourceBuilder.create().build();\n    }\n    \n    @Bean(name = \"slaveDataSource\")\n    @ConfigurationProperties(\"spring.datasource.slave\")\n    public DataSource slave() {\n        return DataSourceBuilder.create().build();\n    }\n    \n    @Bean\n    public DataSource routingDataSource() {\n        Map<Object, Object> map = new HashMap<>();\n        map.put(\"master\", master());\n        map.put(\"slave\", slave());\n        \n        var routing = new AbstractRoutingDataSource() {\n            @Override\n            protected Object determineCurrentLookupKey() {\n                return DataSourceContext.get();\n            }\n        };\n        routing.setDefaultTargetDataSource(master());\n        routing.setTargetDataSources(map);\n        return routing;\n    }\n}\n\n// 用 ThreadLocal 切换\npublic class DataSourceContext {\n    private static final ThreadLocal<String> CONTEXT = new ThreadLocal<>();\n    public static void set(String type) { CONTEXT.set(type); }\n    public static String get() { return CONTEXT.get(); }\n    public static void clear() { CONTEXT.remove(); }\n}\n\n// AOP 自动切换读库\n@Aspect\n@Component\npublic class ReadOnlyAspect {\n    @Around(\"@annotation(transactional)\")\n    public Object around(ProceedingJoinPoint pjp, Transactional transactional) throws Throwable {\n        if (transactional.readOnly()) {\n            DataSourceContext.set(\"slave\");\n        }\n        try {\n            return pjp.proceed();\n        } finally {\n            DataSourceContext.clear();\n        }\n    }\n}\n```\n\n注意：事务内不能切换数据源，Spring 在事务开始时绑定连接。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "MyBatis-Plus 逻辑删除 + 自动填充怎么配？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 1. 实体类\n@Data\n@TableName(\"t_user\")\npublic class User {\n    @TableId(type = IdType.AUTO)\n    private Long id;\n    private String name;\n    \n    @TableLogic  // 逻辑删除\n    private Integer deleted;  // 0=正常, 1=删除\n    \n    @TableField(fill = FieldFill.INSERT)\n    private LocalDateTime createTime;\n    \n    @TableField(fill = FieldFill.INSERT_UPDATE)\n    private LocalDateTime updateTime;\n}\n\n// 2. 自动填充处理器\n@Component\npublic class MetaHandler implements MetaObjectHandler {\n    @Override\n    public void insertFill(MetaObject metaObject) {\n        this.strictInsertFill(metaObject, \"createTime\", LocalDateTime.class, LocalDateTime.now());\n        this.strictInsertFill(metaObject, \"updateTime\", LocalDateTime.class, LocalDateTime.now());\n    }\n    \n    @Override\n    public void updateFill(MetaObject metaObject) {\n        this.strictUpdateFill(metaObject, \"updateTime\", LocalDateTime.class, LocalDateTime.now());\n    }\n}\n\n// 3. 全局逻辑删除配置\nmybatis-plus:\n  global-config:\n    db-config:\n      logic-delete-field: deleted\n      logic-delete-value: 1\n      logic-not-delete-value: 0\n\n// 4. 使用\nuserMapper.deleteById(1L);\n// 实际 SQL: UPDATE t_user SET deleted=1 WHERE id=1 AND deleted=0\n\n// 查询自动过滤\nuserMapper.selectList(null);\n// 实际 SQL: SELECT * FROM t_user WHERE deleted=0\n```\n\n注意：逻辑删除后唯一索引可能冲突，在建表时需考虑 deleted 字段加入唯一索引。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 用 @Async 异步任务，怎么配置线程池和异常处理？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Configuration\n@EnableAsync\npublic class AsyncConfig implements AsyncConfigurer {\n    \n    @Bean(\"taskExecutor\")\n    public Executor taskExecutor() {\n        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();\n        executor.setCorePoolSize(4);\n        executor.setMaxPoolSize(8);\n        executor.setQueueCapacity(200);\n        executor.setThreadNamePrefix(\"async-\");\n        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());\n        executor.setWaitForTasksToCompleteOnShutdown(true);\n        executor.setAwaitTerminationSeconds(30);\n        executor.initialize();\n        return executor;\n    }\n    \n    @Override\n    public Executor getAsyncExecutor() {\n        return taskExecutor();\n    }\n    \n    @Override  // 全局异常处理\n    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {\n        return (ex, method, params) -> {\n            log.error(\"异步任务异常: {}.{} params={}\",\n                method.getDeclaringClass().getSimpleName(),\n                method.getName(), Arrays.toString(params), ex);\n        };\n    }\n}\n\n// 使用\n@Service\npublic class NotificationService {\n    @Async(\"taskExecutor\")\n    public CompletableFuture<String> sendAsync(Long userId) {\n        // 业务逻辑\n        return CompletableFuture.completedFuture(\"ok\");\n    }\n}\n```\n\n注意：@Async 方法必须 public，同类内部调用不生效（代理问题）。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "JPA N+1 问题怎么发现和解决？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// ❌ N+1 问题\n@Entity public class Order {\n    @ManyToOne(fetch = FetchType.EAGER)  // 或默认 LAZY\n    private User user;\n}\n// 查 10 个订单 → 1 条 SQL 查订单 + 10 条 SQL 查用户\n\n// ✅ 方案一：JOIN FETCH\n@Query(\"SELECT o FROM Order o JOIN FETCH o.user WHERE o.status = :status\")\nList<Order> findByStatusWithUser(@Param(\"status\") String status);\n\n// ✅ 方案二：EntityGraph\n@Entity\n@NamedEntityGraph(name = \"Order.user\", attributeNodes = @NamedAttributeNode(\"user\"))\npublic class Order { ... }\n\n@Repository\npublic interface OrderRepository extends JpaRepository<Order, Long> {\n    @EntityGraph(\"Order.user\")\n    List<Order> findByStatus(String status);\n}\n\n// ✅ 方案三：@BatchSize（全局）\n@Entity\npublic class User {\n    @BatchSize(size = 50)  // 一次查 50 个 User\n    @OneToMany(mappedBy = \"user\")\n    private List<Order> orders;\n}\n// 查 100 个 User 的订单 → 2 条 SQL（每 50 个一批）\n\n// 检测：开启 SQL 日志\nlogging.level.org.hibernate.SQL: DEBUG\nlogging.level.org.hibernate.type.descriptor.sql.BasicBinder: TRACE\n// 看日志里重复的 SELECT，就是 N+1\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Redis 分布式锁怎么写？注意什么问题？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Component\npublic class RedisLock {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    private static final String LOCK_PREFIX = \"lock:\";\n    \n    public boolean tryLock(String key, String value, long expireSeconds) {\n        return Boolean.TRUE.equals(\n            redis.opsForValue().setIfAbsent(\n                LOCK_PREFIX + key, value, expireSeconds, TimeUnit.SECONDS\n            )\n        );\n    }\n    \n    public void unlock(String key, String value) {\n        String script = \"if redis.call('get', KEYS[1]) == ARGV[1] then \" +\n                       \"return redis.call('del', KEYS[1]) else return 0 end\";\n        redis.execute(new DefaultRedisScript<>(script, Long.class),\n            Collections.singletonList(LOCK_PREFIX + key), value);\n    }\n    \n    // 使用\n    public void doSomething() {\n        String lockValue = UUID.randomUUID().toString();\n        if (!tryLock(\"order:123\", lockValue, 30)) {\n            throw new BusinessException(\"操作太频繁，请稍后\");\n        }\n        try {\n            // 业务逻辑\n        } finally {\n            unlock(\"order:123\", lockValue);\n        }\n    }\n}\n```\n\n**注意**：\n1. 解锁必须 Lua 脚本保证原子性（先判断 value 再删）\n2. 必须设过期时间，防死锁\n3. value 用 UUID，防止解错别人的锁\n4. **不要**先 setnx 再 expire（两步不原子）——用 setIfAbsent 的 expire 参数\n5. 生产环境用 Redisson（看门狗自动续期）"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "这段 SQL 太慢了，怎么优化？\n```sql\nSELECT o.*, u.name FROM orders o\nLEFT JOIN users u ON o.user_id = u.id\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC\nLIMIT 20\n```"
+      },
+      {
+        "from": "gpt",
+        "value": "先用 EXPLAIN 看：\n```sql\nEXPLAIN SELECT o.*, u.name FROM orders o\nLEFT JOIN users u ON o.user_id = u.id\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC LIMIT 20;\n```\n\n**典型问题**：\n1. type=ALL（全表扫描）→ 加索引\n2. Extra=Using filesort → 排序没走索引\n3. 如果是 LEFT JOIN 且 user_id 没索引 → JOIN 很慢\n\n**优化**：\n```sql\n-- 1. 联合索引（覆盖 WHERE + ORDER BY）\nALTER TABLE orders ADD INDEX idx_status_time (status, create_time);\n\n-- 2. users 表加 JOIN 索引\nALTER TABLE users ADD INDEX idx_id (id);  -- 如果有主键就不需要\n\n-- 3. 覆盖索引（不回表）\nALTER TABLE orders ADD INDEX idx_cover (status, create_time, user_id);\n-- 但 SELECT o.* 还是会回表，除非只查需要的列\n\n-- 优化后查询\nSELECT o.id, o.amount, o.create_time, u.name \nFROM orders o\nJOIN users u ON o.user_id = u.id  -- LEFT JOIN 改 JOIN（有 status 过滤不需要左连）\nWHERE o.status = 'PAID'\nORDER BY o.create_time DESC\nLIMIT 20;\n```\n\n**验证**：再跑 EXPLAIN，key 应该显示 `idx_status_time`，Extra 没有 Using filesort。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "@Scheduled 定时任务在集群环境怎么保证只执行一次？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 方案一：Redis 分布式锁（推荐）\n@Component\npublic class ScheduledTask {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    @Scheduled(cron = \"0 0 2 * * ?\")\n    public void cleanExpiredData() {\n        String lockKey = \"task:clean:lock\";\n        Boolean locked = redis.opsForValue()\n            .setIfAbsent(lockKey, \"1\", 60, TimeUnit.SECONDS);\n        if (Boolean.TRUE.equals(locked)) {\n            try {\n                // 执行任务\n                log.info(\"清理过期数据...\");\n            } finally {\n                redis.delete(lockKey);\n            }\n        }\n    }\n}\n\n// 方案二：ShedLock（专用框架）\n@SchedulerLock(name = \"cleanTask\", \n    lockAtMostFor = \"PT10M\",     // 最多锁 10 分钟\n    lockAtLeastFor = \"PT1M\")     // 至少锁 1 分钟\n@Scheduled(cron = \"0 0 2 * * ?\")\npublic void cleanTask() {\n    // 自动加锁解锁\n}\n\n// 方案三：XXL-JOB / PowerJob（分布式调度平台）\n// 自带任务分片、故障转移、控制台管理\n// Spring Boot 接入：\n@XxlJob(\"cleanTask\")\npublic void cleanTask() {\n    // 平台自动保证只有一个实例执行\n}\n```\n\n**选择**：简单场景用 Redis 锁，复杂调度用 XXL-JOB。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 日志怎么配置？怎么按级别输出到不同文件？"
+      },
+      {
+        "from": "gpt",
+        "value": "```xml\n<!-- logback-spring.xml -->\n<configuration>\n    <!-- 控制台 -->\n    <appender name=\"CONSOLE\" class=\"ch.qos.logback.core.ConsoleAppender\">\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 所有日志 -->\n    <appender name=\"FILE\" class=\"ch.qos.logback.core.rolling.RollingFileAppender\">\n        <file>logs/app.log</file>\n        <rollingPolicy class=\"ch.qos.logback.core.rolling.TimeBasedRollingPolicy\">\n            <fileNamePattern>logs/app.%d{yyyy-MM-dd}.log</fileNamePattern>\n            <maxHistory>30</maxHistory>\n        </rollingPolicy>\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 错误日志单独文件 -->\n    <appender name=\"ERROR_FILE\" class=\"ch.qos.logback.core.rolling.RollingFileAppender\">\n        <file>logs/error.log</file>\n        <filter class=\"ch.qos.logback.classic.filter.ThresholdFilter\">\n            <level>ERROR</level>\n        </filter>\n        <rollingPolicy class=\"ch.qos.logback.core.rolling.TimeBasedRollingPolicy\">\n            <fileNamePattern>logs/error.%d{yyyy-MM-dd}.log</fileNamePattern>\n        </rollingPolicy>\n        <encoder>\n            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>\n        </encoder>\n    </appender>\n    \n    <!-- 业务日志单独文件 -->\n    <logger name=\"com.example.business\" level=\"INFO\" additivity=\"false\">\n        <appender-ref ref=\"BUSINESS_FILE\"/>\n    </logger>\n    \n    <root level=\"INFO\">\n        <appender-ref ref=\"CONSOLE\"/>\n        <appender-ref ref=\"FILE\"/>\n        <appender-ref ref=\"ERROR_FILE\"/>\n    </root>\n</configuration>\n```\n\napplication.yml：\n```yaml\nlogging:\n  level:\n    root: INFO\n    com.example: DEBUG  # 自己的包开 DEBUG\n    org.springframework: WARN\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "AOP 实现接口调用日志，记录 Controller 的请求参数和响应"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Aspect\n@Component\n@Slf4j\npublic class ControllerLogAspect {\n    \n    @Around(\"execution(* com.example.controller..*.*(..))\")\n    public Object logAround(ProceedingJoinPoint pjp) throws Throwable {\n        long start = System.currentTimeMillis();\n        String method = pjp.getSignature().toShortString();\n        Object[] args = pjp.getArgs();\n        \n        // 不记录大对象和敏感字段\n        String params = Arrays.stream(args)\n            .filter(a -> !(a instanceof HttpServletRequest))\n            .filter(a -> !(a instanceof HttpServletResponse))\n            .map(a -> {\n                String s = JSON.toJSONString(a);\n                return s.length() > 500 ? s.substring(0, 500) : s;\n            })\n            .collect(Collectors.joining(\",\"));\n        \n        log.info(\"【请求】{} | 参数: {}\", method, params);\n        \n        Object result = pjp.proceed();\n        \n        String resp = JSON.toJSONString(result);\n        if (resp.length() > 1000) resp = resp.substring(0, 1000);\n        \n        log.info(\"【响应】{} | 耗时: {}ms | 结果: {}\",\n            method, System.currentTimeMillis() - start, resp);\n        \n        return result;\n    }\n}\n\n// 更优雅：自定义注解\n@Target(ElementType.METHOD)\n@Retention(RetentionPolicy.RUNTIME)\npublic @interface ApiLog {\n    String value() default \"\";\n    boolean logResult() default true;\n}\n\n@Around(\"@annotation(apiLog)\")\npublic Object logApi(ProceedingJoinPoint pjp, ApiLog apiLog) throws Throwable {\n    String desc = apiLog.value().isEmpty() ? \n        pjp.getSignature().getName() : apiLog.value();\n    log.info(\"【{}】开始\", desc);\n    Object result = pjp.proceed();\n    if (apiLog.logResult()) {\n        log.info(\"【{}】完成: {}\", desc, JSON.toJSONString(result));\n    }\n    return result;\n}\n\n// Controller 上加 @ApiLog(\"创建订单\") 即可\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "怎么设计一个可靠的延迟队列？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 方案一：Redis ZSet（最轻量）\n@Component\npublic class RedisDelayQueue {\n    @Autowired\n    private StringRedisTemplate redis;\n    \n    public void addTask(String task, long delaySeconds) {\n        long executeAt = System.currentTimeMillis() + delaySeconds * 1000;\n        redis.opsForZSet().add(\"delay:queue\", task, executeAt);\n    }\n    \n    @Scheduled(fixedDelay = 1000)\n    public void consume() {\n        long now = System.currentTimeMillis();\n        Set<String> tasks = redis.opsForZSet()\n            .rangeByScore(\"delay:queue\", 0, now, 0, 10);\n        if (tasks.isEmpty()) return;\n        \n        for (String task : tasks) {\n            // 原子移除（防并发）\n            if (redis.opsForZSet().remove(\"delay:queue\", task) > 0) {\n                try {\n                    process(task);\n                } catch (Exception e) {\n                    // 失败重试：重新加入队列\n                    addTask(task, 60);  // 60 秒后重试\n                }\n            }\n        }\n    }\n}\n\n// 方案二：RocketMQ 延迟消息\n// 发送:\nMessage msg = new Message(\"ORDER_TOPIC\", \"order:123\".getBytes());\nmsg.setDelayTimeLevel(3);  // 延迟等级 3 = 10 秒\nproducer.send(msg);\n\n// 方案三：RabbitMQ 死信队列\n@Configuration\npublic class DelayQueueConfig {\n    @Bean\n    public Queue delayQueue() {\n        return QueueBuilder.durable(\"delay.queue\")\n            .deadLetterExchange(\"dlx.exchange\")\n            .deadLetterRoutingKey(\"dlx.routing\")\n            .ttl(30000)  // 30 秒过期后进入死信队列\n            .build();\n    }\n}\n```\n\n**选择**：\n- 小规模/无 MQ：Redis ZSet\n- 中等规模：RabbitMQ 死信队列\n- 大规模/高可靠：RocketMQ 延迟消息"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Java 枚举的高级用法？状态机、策略模式怎么用枚举实现？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// 1. 枚举实现状态机\npublic enum OrderStatus {\n    CREATED {\n        @Override\n        public OrderStatus next() { return PAID; }\n        @Override\n        public boolean canCancel() { return true; }\n    },\n    PAID {\n        @Override\n        public OrderStatus next() { return SHIPPED; }\n        @Override\n        public boolean canCancel() { return true; }\n    },\n    SHIPPED {\n        @Override\n        public OrderStatus next() { return DONE; }\n        @Override\n        public boolean canCancel() { return false; }\n    },\n    DONE {\n        @Override\n        public OrderStatus next() { return this; }\n        @Override\n        public boolean canCancel() { return false; }\n    };\n    \n    public abstract OrderStatus next();\n    public abstract boolean canCancel();\n}\n\n// 2. 枚举实现策略模式\npublic enum Calculator {\n    ADD(\"+\", BigDecimal::add),\n    SUB(\"-\", BigDecimal::subtract),\n    MUL(\"*\", BigDecimal::multiply),\n    DIV(\"/\", (a, b) -> {\n        if (b.compareTo(BigDecimal.ZERO) == 0) throw new ArithmeticException();\n        return a.divide(b, 2, RoundingMode.HALF_UP);\n    });\n    \n    private final String symbol;\n    private final BinaryOperator<BigDecimal> operation;\n    \n    Calculator(String symbol, BinaryOperator<BigDecimal> op) {\n        this.symbol = symbol;\n        this.operation = op;\n    }\n    \n    public BigDecimal apply(BigDecimal a, BigDecimal b) {\n        return operation.apply(a, b);\n    }\n    \n    public static Calculator fromSymbol(String s) {\n        for (Calculator c : values()) {\n            if (c.symbol.equals(s)) return c;\n        }\n        throw new IllegalArgumentException(\"不支持: \" + s);\n    }\n}\n\n// 使用\nOrderStatus status = OrderStatus.CREATED;\nif (status.canCancel()) { /* 取消 */ }\n\nBigDecimal result = Calculator.fromSymbol(\"+\").apply(a, b);\n```\n\n枚举策略比 if-else/switch 清晰，编译期检查，新增策略只需加枚举值。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Optional 怎么用才不滥用？什么场景不该用？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// ✅ 正确用法 — 返回值可能为空\npublic Optional<User> findById(Long id) {\n    return Optional.ofNullable(userMapper.selectById(id));\n}\n\n// 调用方\nUser user = userService.findById(1L)\n    .orElseThrow(() -> new NotFoundException(\"用户不存在\"));\n\n// ✅ 链式变换\nString city = userService.findById(1L)\n    .map(User::getAddress)\n    .map(Address::getCity)\n    .orElse(\"未知\");\n\n// ❌ 滥用 — 不要当 null 检查用\nOptional.ofNullable(user).ifPresent(u -> { ... });\n// 直接用 if (user != null) 更清晰\n\n// ❌ 不要作为字段类型\npublic class User {\n    private Optional<String> email;  // 不好，序列化麻烦\n    private String email;            // 好\n}\n\n// ❌ 不要作为方法参数\npublic void process(Optional<String> param) { }  // 不好\npublic void process(String param) { }             // 好\n\n// ❌ 不要用 isPresent + get\nif (opt.isPresent()) {\n    return opt.get();  // 等于 null 检查\n}\n// 用 orElse / orElseGet / orElseThrow\n\n// ❌ Optional 里放集合\nOptional<List<User>>  // 不好\n// 直接用空集合: Collections.emptyList()\n```\n\n**原则**：Optional 只用于返回值可能为空的场景，不用在字段、参数、集合上。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "代码里 BigDecimal 怎么用才不踩坑？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// ❌ 坑1：构造函数用 double\nBigDecimal d = new BigDecimal(0.1);\nSystem.out.println(d);  // 0.1000000000000000055511151231257827021181583404541015625\n\n// ✅ 用字符串\nBigDecimal d = new BigDecimal(\"0.1\");  // 0.1\nBigDecimal d = BigDecimal.valueOf(0.1);  // 0.1（也可以用，内部转了字符串）\n\n// ❌ 坑2：equals 比较精度\nnew BigDecimal(\"1.0\").equals(new BigDecimal(\"1.00\"));  // false！\n\n// ✅ 用 compareTo\nnew BigDecimal(\"1.0\").compareTo(new BigDecimal(\"1.00\"));  // 0（相等）\n\n// ❌ 坑3：除法不指定精度\nnew BigDecimal(\"10\").divide(new BigDecimal(\"3\"));  // 抛异常！\n\n// ✅ 指定精度和舍入模式\nnew BigDecimal(\"10\").divide(new BigDecimal(\"3\"), 2, RoundingMode.HALF_UP);  // 3.33\n\n// 金额计算最佳实践\npublic class MoneyUtils {\n    public static BigDecimal yuan(long fen) {\n        return new BigDecimal(fen).divide(new BigDecimal(\"100\"), 2, RoundingMode.HALF_UP);\n    }\n    \n    public static long fen(BigDecimal yuan) {\n        return yuan.multiply(new BigDecimal(\"100\")).longValue();\n    }\n}\n// 数据库存分（Long），展示用元（BigDecimal），避免浮点精度问题\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 统一返回体 Result<T> 怎么写？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n@Data\n@NoArgsConstructor\n@AllArgsConstructor\npublic class Result<T> implements Serializable {\n    private int code;\n    private String message;\n    private T data;\n    private long timestamp = System.currentTimeMillis();\n    \n    public static <T> Result<T> ok() {\n        return new Result<>(200, \"success\", null, System.currentTimeMillis());\n    }\n    \n    public static <T> Result<T> ok(T data) {\n        return new Result<>(200, \"success\", data, System.currentTimeMillis());\n    }\n    \n    public static <T> Result<T> fail(String message) {\n        return new Result<>(500, message, null, System.currentTimeMillis());\n    }\n    \n    public static <T> Result<T> fail(int code, String message) {\n        return new Result<>(code, message, null, System.currentTimeMillis());\n    }\n    \n    // 不需要包装 Result 的接口用这个\n    @Target(ElementType.METHOD)\n    @Retention(RetentionPolicy.RUNTIME)\n    public @interface IgnoreResult {}\n}\n\n// 统一包装（ResponseBodyAdvice）\n@RestControllerAdvice\npublic class ResultAdvice implements ResponseBodyAdvice<Object> {\n    @Override\n    public boolean supports(MethodParameter returnType, Class converterType) {\n        return !returnType.hasMethodAnnotation(Result.IgnoreResult.class);\n    }\n    \n    @Override\n    public Object beforeBodyWrite(Object body, MethodParameter returnType,\n            MediaType contentType, Class converterType,\n            ServerHttpRequest request, ServerHttpResponse response) {\n        if (body instanceof Result) return body;\n        return Result.ok(body);\n    }\n}\n\n// Controller\n@GetMapping(\"/user/{id}\")\npublic User getUser(@PathVariable Long id) {\n    return userService.getById(id);  // 自动包装成 Result<User>\n}\n\n@GetMapping(\"/health\")\n@Result.IgnoreResult  // 不包装\npublic String health() { return \"OK\"; }\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "IntelliJ IDEA 常用快捷键和插件推荐"
+      },
+      {
+        "from": "gpt",
+        "value": "**必备快捷键**：\n```\nCtrl+Shift+A     查找所有操作（万能入口）\nCtrl+Alt+L       格式化代码\nCtrl+Alt+O       优化 import\nShift+F6         重命名（所有引用）\nCtrl+Alt+M       提取方法\nCtrl+Alt+V       提取变量\nCtrl+Alt+T       包裹（if/try/for）\nCtrl+Shift+Enter 补全当前行\nAlt+Enter        万能修复\nCtrl+E           最近文件\nCtrl+Shift+F     全局搜索\nDouble Shift     搜索任何东西\n```\n\n**必备插件**：\n| 插件 | 作用 |\n|------|------|\n| MyBatisX | Mapper↔XML 跳转，代码生成 |\n| Maven Helper | 依赖冲突分析 |\n| GitToolBox | 行级 Git Blame |\n| RestfulTool | 接口树形导航 |\n| SonarLint | 实时代码检查 |\n| Key Promoter X | 快捷键学习 |\n| String Manipulation | 大小写/驼峰/下划线转换 |\n\n**代码模板 (Live Templates)**：\n```\npsvm  → public static void main\nsout  → System.out.println()\n.for  → for 循环\n.null → if null check\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "如何用 Arthas 排查线上问题？给几个常用命令"
+      },
+      {
+        "from": "gpt",
+        "value": "```bash\n# 安装\ncurl -O https://arthas.aliyun.com/arthas-boot.jar\njava -jar arthas-boot.jar\n\n# 1. 看哪个方法最慢\ntrace com.example.service.UserService getUser '#cost > 100'\n# 打印所有耗时 >100ms 的 getUser 调用链\n\n# 2. 看方法的入参和返回值（不重启！）\nwatch com.example.service.UserService getUser '{params, returnObj}' -x 3\n# -x 3 表示展开 3 层对象\n\n# 3. 热修复代码（不重启！）\n# 先写一个修复脚本 Fix.java，然后：\nredefine /tmp/Fix.class\n\n# 4. 看 Controller 被哪些 IP 调用\nwatch com.example.controller.* * '{params, @java.net.InetAddress@getLocalHost()}' -x 2\n\n# 5. 动态改日志级别\nlogger --name com.example --level DEBUG\n\n# 6. 看线程状态\nthead -b  # 阻塞的线程\nthead -n 3  # 最忙的 3 个线程\n\n# 7. JVM 信息\ndashboard  # 实时面板\njvm  # JVM 概况\n\n# 8. 反编译看线上代码\njad com.example.service.UserService\n\n# 9. 监控方法调用（类似 JProfiler）\nmonitor -c 5 com.example.controller.* *\n```\n\n**注意**：watch/trace 有性能开销，排查完记得 `stop` 停止。"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Spring Boot 怎么优雅地做参数校验？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// DTO\n@Data\npublic class RegisterDTO {\n    @NotBlank(message = \"用户名不能为空\")\n    @Size(min = 2, max = 20, message = \"用户名 2-20 位\")\n    private String username;\n    \n    @NotBlank(message = \"密码不能为空\")\n    @Pattern(regexp = \"^(?=.*[a-z])(?=.*[A-Z])(?=.*\\\\d).{8,}$\",\n        message = \"密码需包含大小写字母和数字，至少8位\")\n    private String password;\n    \n    @Email(message = \"邮箱格式不正确\")\n    private String email;\n    \n    @NotNull(message = \"手机号不能为空\")\n    @Pattern(regexp = \"^1[3-9]\\\\d{9}$\", message = \"手机号格式不正确\")\n    private String phone;\n    \n    @Min(value = 0, message = \"年龄不能为负\")\n    @Max(value = 150, message = \"年龄不合法\")\n    private Integer age;\n}\n\n// Controller\n@PostMapping(\"/register\")\npublic Result register(@Valid @RequestBody RegisterDTO dto) {\n    userService.register(dto);\n    return Result.ok();\n}\n\n// 分组校验\npublic interface Create {}\npublic interface Update {}\n\n@Data\npublic class UserDTO {\n    @Null(groups = Create.class, message = \"创建时不需要 ID\")\n    @NotNull(groups = Update.class, message = \"更新时必须传 ID\")\n    private Long id;\n    \n    @NotBlank(groups = {Create.class, Update.class})\n    private String name;\n}\n\n// Controller 指定分组\n@PostMapping\npublic Result create(@Validated(Create.class) @RequestBody UserDTO dto) { }\n\n// 自定义校验注解\n@Target(ElementType.FIELD)\n@Retention(RetentionPolicy.RUNTIME)\n@Constraint(validatedBy = EnumValidator.class)\npublic @interface EnumValue {\n    Class<? extends Enum<?>> enumClass();\n    String message() default \"值不在允许范围内\";\n}\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Maven 依赖冲突怎么排查？jar 包版本冲突了"
+      },
+      {
+        "from": "gpt",
+        "value": "```bash\n# 1. 看依赖树\nmvn dependency:tree\n\n# 2. 找冲突（IDEA 用 Maven Helper 插件，图形化）\nmvn dependency:tree -Dincludes=com.fasterxml.jackson\n# 只看 jackson 相关\n\n# 3. 排除传递依赖\n<dependency>\n    <groupId>org.springframework.boot</groupId>\n    <artifactId>spring-boot-starter-web</artifactId>\n    <exclusions>\n        <exclusion>\n            <groupId>com.fasterxml.jackson</groupId>\n            <artifactId>jackson-databind</artifactId>\n        </exclusion>\n    </exclusions>\n</dependency>\n\n# 4. 强制版本（dependencyManagement）\n<dependencyManagement>\n    <dependencies>\n        <dependency>\n            <groupId>com.fasterxml.jackson</groupId>\n            <artifactId>jackson-databind</artifactId>\n            <version>2.15.0</version>\n        </dependency>\n    </dependencies>\n</dependencyManagement>\n\n# 5. 看哪些 jar 冲突\nmvn enforcer:enforce  # 需要 maven-enforcer-plugin\n```\n\n**原则**：\n- Spring Boot 项目用 `spring-boot-starter-*` 统一管理版本\n- 第三方 jar 用 `<dependencyManagement>` 锁定版本\n- IDEA 装 Maven Helper，冲突一目了然\n- 不要随意升级 Spring Boot 管理的依赖版本"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "常用的 Linux 命令，排查 Java 应用问题"
+      },
+      {
+        "from": "gpt",
+        "value": "```bash\n# CPU 高\n# 1. 找最耗 CPU 的线程\ntop -H -p $(pgrep java)\n# 2. 线程 ID 转 16 进制\nprintf '%x\\n' 12345\n# 3. 看线程堆栈\njstack <pid> | grep -A 20 <hex_tid>\n\n# 内存高\n# 1. 看堆内存\njmap -heap <pid>\n# 2. 看哪些对象多\njmap -histo:live <pid> | head -20\n# 3. dump 堆（会卡顿）\njmap -dump:format=b,file=heap.hprof <pid>\n\n# 磁盘\n# 1. 看哪个目录大\ndu -sh /* 2>/dev/null | sort -hr | head -10\n# 2. 看哪些文件在被写\nlsof | grep deleted  # 文件被删但进程还持有\n\n# GC 日志\n# 1. 实时 GC\njstat -gc <pid> 1000\n# 2. 看 GC 详情\njstat -gcutil <pid> 1000 10\n\n# 网络\n# 1. 看连接数\nss -s\n# 2. 看 TIME_WAIT 有多少\nss -tan | grep TIME_WAIT | wc -l\n# 3. 看端口监听\nss -tlnp | grep java\n\n# 日志排查\n# 1. 看 ERROR 日志\ngrep ERROR app.log | tail -20\n# 2. 看某个时间段\nsed -n '/2026-05-30 10:00/,/2026-05-30 10:30/p' app.log\n# 3. 统计某接口调用次数\ngrep 'POST /order' access.log | wc -l\n```"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Java 怎么生成和解析 Excel？POI 和 EasyExcel 选哪个？"
+      },
+      {
+        "from": "gpt",
+        "value": "```java\n// EasyExcel — 推荐，内存占用极低\n// 1. 定义模型\n@Data\npublic class UserExcel {\n    @ExcelProperty(\"用户名\")\n    private String name;\n    \n    @ExcelProperty(\"手机号\")\n    private String phone;\n    \n    @ExcelProperty(value = \"注册时间\", format = \"yyyy-MM-dd HH:mm:ss\")\n    private Date createTime;\n    \n    @ExcelIgnore  // 不导出\n    private String password;\n}\n\n// 2. 导出（百万级数据不 OOM）\n@GetMapping(\"/export\")\npublic void export(HttpServletResponse response) throws IOException {\n    response.setContentType(\"application/vnd.ms-excel\");\n    response.setHeader(\"Content-Disposition\", \"attachment;filename=users.xlsx\");\n    \n    EasyExcel.write(response.getOutputStream(), UserExcel.class)\n        .sheet(\"用户\")\n        .doWrite(() -> userService.streamAll());  // 流式读取\n}\n\n// 3. 导入\n@PostMapping(\"/import\")\npublic Result importExcel(@RequestParam MultipartFile file) throws IOException {\n    EasyExcel.read(file.getInputStream(), UserExcel.class,\n        new ReadListener<UserExcel>() {\n            private final List<UserExcel> batch = new ArrayList<>(1000);\n            \n            @Override\n            public void invoke(UserExcel data, AnalysisContext ctx) {\n                batch.add(data);\n                if (batch.size() >= 1000) {\n                    userService.saveBatch(batch);\n                    batch.clear();\n                }\n            }\n            \n            @Override\n            public void doAfterAllAnalysed(AnalysisContext ctx) {\n                if (!batch.isEmpty()) userService.saveBatch(batch);\n            }\n        }).sheet().doRead();\n    return Result.ok();\n}\n\n// POI — 需要复杂格式（合并单元格、图表）时用\n// EasyExcel — 简单表格，大数据量（他们官网说 75M 文件 3M 内存读取）\n```"
+      }
+    ]
   }
 ]
