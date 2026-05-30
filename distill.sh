@@ -66,7 +66,7 @@ echo ""
 cd LLaMA-Factory
 
 llamafactory-cli train \
-    --model_name_or_path "Qwen/Qwen2.5-Coder-7B-Instruct" \
+    --model_name_or_path "Qwen/Qwen2.5-Coder-1.5B-Instruct" \
     --dataset java_corpus \
     --template qwen \
     --finetuning_type lora \
@@ -135,7 +135,7 @@ import torch, os
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
-model_path = "Qwen/Qwen2.5-Coder-7B-Instruct"
+model_path = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 adapter_path = os.environ.get("ADAPTER_PATH", "../output/java-expert")
 output_path = "../java-expert-merged"
 
