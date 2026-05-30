@@ -140,9 +140,17 @@ cd ..
 echo ""
 echo "===== 5/6 合并模型 ====="
 cd LLaMA-Factory
+
+# 找到最新 checkpoint
+CHECKPOINT=$(ls -d ../output/java-expert/checkpoint-* 2>/dev/null | sort -V | tail -1)
+if [ -z "$CHECKPOINT" ]; then
+    CHECKPOINT="../output/java-expert"
+fi
+echo "使用适配器: $CHECKPOINT"
+
 llamafactory-cli export \
     --model_name_or_path "Qwen/Qwen2.5-Coder-7B-Instruct" \
-    --adapter_name_or_path ../output/java-expert \
+    --adapter_name_or_path "$CHECKPOINT" \
     --template qwen \
     --export_dir ../java-expert-merged \
     --export_size 2 \
