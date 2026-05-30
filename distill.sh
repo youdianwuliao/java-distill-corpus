@@ -92,7 +92,7 @@ with open('LLaMA-Factory/data/dataset_info.json') as f:
 info['java_corpus'] = {
     'file_name': 'java-corpus-sharegpt.json',
     'formatting': 'sharegpt',
-    'columns': {'messages': 'conversations'}
+    'columns': {'messages': 'conversations', 'system': 'system'}
 }
 with open('LLaMA-Factory/data/dataset_info.json', 'w') as f:
     json.dump(info, f, indent=2, ensure_ascii=False)
