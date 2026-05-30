@@ -128,6 +128,8 @@ llamafactory-cli train \
     --dataset java_corpus \
     --template qwen \
     --finetuning_type lora \
+    --quantization_bit 4 \
+    --quantization_type nf4 \
     --lora_rank 8 \
     --lora_alpha 16 \
     --lora_dropout 0.05 \
@@ -144,9 +146,6 @@ llamafactory-cli train \
     --output_dir ../output/java-expert \
     --fp16 \
     --gradient_checkpointing \
-    --load_in_4bit \
-    --bnb_4bit_compute_dtype float16 \
-    --bnb_4bit_quant_type nf4 \
     --max_length 2048
 
 cd ..
