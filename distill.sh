@@ -202,21 +202,35 @@ tokenizer.save_pretrained(output_path)
 print(f"✅ 合并完成: {output_path}")
 MERGE
 
-# ===== Ollama =====
+# ===== 导入 Ollama =====
 echo ""
 echo "===== 导入 Ollama ====="
+echo "转换 GGUF..."
+
+# 从 Gitee 镜像克隆 llama.cpp（GitHub 可能连不上）
+if [ ! -d "llama.cpp" ]; then
+    git clone --depth 1 https://gitee.com/mirrors/llama.cpp.git 2>/dev/null || \
+    git clone --depth 1 https://github.com/ggerganov/llama.cpp.git
+fi
+cd llama.cpp && make -j4 2>/dev/null && cd ..
+
+pip install sentencepiece -q 2>/dev/null
+python3 llama.cpp/convert_hf_to_gguf.py \
+    java-expert-merged \
+    --outtype f16 \
+    --outfile java-expert.gguf
+
 cat > Modelfile << 'OLLAMA'
-FROM ./java-expert-merged
-TEMPLATE """<|im_start|>system
+FROM ./java-expert.gguf
+TEMPLATE """{{ if .System }}<|im_start|>system
 {{ .System }}<|im_end|>
-<|im_start|>user
+{{ end }}<|im_start|>user
 {{ .Prompt }}<|im_end|>
 <|im_start|>assistant
 """
-SYSTEM """你是千羽蒸馏的 Java 专家助手。精通 Spring Boot、MyBatis、Redis、MySQL、并发编程、JVM 调优。回答简洁准确，代码示例带注释。"""
 PARAMETER temperature 0.3
-PARAMETER top_p 0.9
 PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|im_start|>"
 OLLAMA
 
 ollama create java-expert -f Modelfile
