@@ -101,27 +101,56 @@ if [ $TRAIN_RESULT -ne 0 ]; then
 fi
 
 # 检查产出
-if [ ! -d "output/java-expert" ] || [ -z "$(ls -A output/java-expert/)" ]; then
-    die "训练完成但 output/java-expert/ 为空 — 把训练日志发给我"
+if [ ! -f "output/java-expert/adapter_config.json" ]; then
+    echo ""
+    echo -e "${YELLOW}训练未产出 adapter_config.json${NC}"
+    echo "检查 output/ 目录内容："
+    find output/ -type f 2>/dev/null | head -20
+    echo ""
+    echo -e "${RED}把上面所有日志发给我${NC}"
+    deactivate
+    exit 1
 fi
-echo "✅ 训练产出: $(ls output/java-expert/)"
+echo "✅ 训练产出确认"
 
 step "4/5 合并模型"
-cd LLaMA-Factory
+echo "手动合并 LoRA..."
 
-ADAPTER="../output/java-expert"
-# 如果有 checkpoint 子目录就用最新的
-CHECKPOINT=$(ls -d ../output/java-expert/checkpoint-* 2>/dev/null | sort -V | tail -1)
-[ -n "$CHECKPOINT" ] && ADAPTER="$CHECKPOINT"
-echo "适配器路径: $ADAPTER"
+python3 << 'MERGE'
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
-llamafactory-cli export \
-    --model_name_or_path "Qwen/Qwen2.5-Coder-7B-Instruct" \
-    --adapter_name_or_path "$ADAPTER" \
-    --template qwen \
-    --export_dir ../java-expert-merged \
-    --export_size 2 \
-    --export_legacy_format false || die "合并失败"
+model_path = "Qwen/Qwen2.5-Coder-7B-Instruct"
+adapter_path = "../output/java-expert"
+output_path = "../java-expert-merged"
+
+print("加载基座模型...")
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(
+    model_path,
+    torch_dtype=torch.float16,
+    device_map="auto",
+    trust_remote_code=True
+)
+
+print("加载 LoRA 适配器...")
+model = PeftModel.from_pretrained(model, adapter_path)
+
+print("合并权重...")
+model = model.merge_and_unload()
+
+print("保存...")
+model.save_pretrained(output_path, safe_serialization=True)
+tokenizer.save_pretrained(output_path)
+print(f"✅ 模型已保存到 {output_path}")
+MERGE
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}合并失败 — 把上面日志发给我${NC}"
+    deactivate
+    exit 1
+fi
 
 cd ..
 
