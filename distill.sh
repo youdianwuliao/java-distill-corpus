@@ -85,7 +85,10 @@ pip install torch torchvision torchaudio --index-url "$TORCH_INDEX" 2>&1 | tail 
 pip install transformers datasets accelerate peft bitsandbytes scipy -q 2>&1 | tail -1
 
 # 验证 CUDA
-python3 -c 'import torch; print(f"✅ PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}")'
+python3 << 'PYCHECK'
+import torch
+print(f"PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}")
+PYCHECK
 
 # ===== 2. 获取 LLaMA-Factory =====
 echo ""
